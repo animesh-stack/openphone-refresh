@@ -107,10 +107,13 @@ jobs:
             }
 
             // Determine fetch window — only since last refresh
-            const sinceDate = existing && existing.fetchedAt
-              ? new Date(new Date(existing.fetchedAt).getTime() - 5 * 60 * 1000) // 5 min overlap
-              : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000); // 60 days if fresh
-            const createdAfter = sinceDate.toISOString();
+            // Always look back at least 48 hours to avoid missing calls
+            const MIN_LOOKBACK_MS = 48 * 60 * 60 * 1000;
+            const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
+            const lookbackDate = lastFetch
+              ? new Date(Math.min(lastFetch.getTime(), Date.now() - MIN_LOOKBACK_MS))
+              : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+            const createdAfter = lookbackDate.toISOString();
             console.log(`Fetching calls since: ${createdAfter}`);
 
             // Fetch users and phone numbers
