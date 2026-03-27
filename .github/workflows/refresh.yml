@@ -136,6 +136,17 @@ jobs:
             });
             console.log(`${phoneNumbers.length} phone numbers, ${Object.keys(numById).length} mapped`);
 
+            // Update existing user info with fresh data from API
+            // (catches name changes, number reassignments, etc.)
+            Object.values(numById).forEach(u => {
+              if (pivotData[u.email]) {
+                pivotData[u.email].firstName = u.firstName;
+                pivotData[u.email].lastName  = u.lastName;
+                pivotData[u.email].number    = u.number;
+              }
+            });
+            console.log('Updated user info from API');
+
             // Fetch new calls for each phone number
             const seen = new Set();
             const uniqueNumbers = phoneNumbers.filter(pn => {
