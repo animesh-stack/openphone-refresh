@@ -1,0 +1,207 @@
+name: OpenPhone Hourly Refresh
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # Every hour at :00
+  workflow_dispatch:        # Allow manual trigger from GitHub UI
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch from OpenPhone API and update Gist
+        env:
+          OP_API_KEY: ${{ secrets.OP_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: eb3ce9edc8e58d0042a745c0e560b731
+        run: |
+          node << 'EOF'
+          const https = require('https');
+
+          const OP_KEY   = process.env.OP_API_KEY;
+          const GH_TOKEN = process.env.GITHUB_TOKEN;
+          const GIST_ID  = process.env.GIST_ID;
+          const OP_BASE  = 'https://api.openphone.com/v1';
+
+          // ── Helpers ──────────────────────────────────────────────────────
+          function request(url, opts = {}) {
+            return new Promise((resolve, reject) => {
+              const req = https.request(url, opts, res => {
+                let data = '';
+                res.on('data', d => data += d);
+                res.on('end', () => {
+                  try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+                  catch(e) { resolve({ status: res.statusCode, body: data }); }
+                });
+              });
+              req.on('error', reject);
+              if (opts.body) req.write(opts.body);
+              req.end();
+            });
+          }
+
+          async function opGet(path) {
+            const r = await request(`${OP_BASE}${path}`, {
+              headers: { 'Authorization': OP_KEY }
+            });
+            if (r.status !== 200) throw new Error(`OpenPhone API ${r.status}: ${JSON.stringify(r.body)}`);
+            return r.body;
+          }
+
+          async function opGetAll(path) {
+            const results = [];
+            let nextPage = null;
+            do {
+              const sep = path.includes('?') ? '&' : '?';
+              const url = nextPage ? `${path}${sep}maxResults=50&pageToken=${nextPage}` : `${path}?maxResults=50`;
+              const res = await opGet(url);
+              results.push(...(res.data || []));
+              nextPage = res.nextPageToken || null;
+            } while (nextPage);
+            return results;
+          }
+
+          async function fetchGist() {
+            const r = await request(`https://api.github.com/gists/${GIST_ID}`, {
+              headers: { 'Authorization': `token ${GH_TOKEN}`, 'User-Agent': 'openphone-refresh', 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (r.status !== 200) return null;
+            const raw = r.body.files?.['data.json']?.content;
+            if (!raw || raw === '{}') return null;
+            return JSON.parse(raw);
+          }
+
+          async function saveGist(data) {
+            const body = JSON.stringify({ files: { 'data.json': { content: JSON.stringify(data) } } });
+            const r = await request(`https://api.github.com/gists/${GIST_ID}`, {
+              method: 'PATCH',
+              headers: {
+                'Authorization': `token ${GH_TOKEN}`,
+                'User-Agent': 'openphone-refresh',
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body)
+              },
+              body
+            });
+            if (r.status !== 200) throw new Error(`Gist save failed: ${r.status}`);
+            console.log('Saved to Gist successfully');
+          }
+
+          function normNum(n) { return String(n).replace(/[^0-9]/g, ''); }
+
+          // ── Main ─────────────────────────────────────────────────────────
+          async function main() {
+            console.log('Starting OpenPhone refresh...');
+
+            // Load existing data
+            const existing = await fetchGist();
+            const pivotData = {};
+
+            if (existing && existing.rows) {
+              existing.rows.forEach(u => {
+                pivotData[u.email] = { ...u, months: { ...u.months }, days: { ...(u.days||{}) } };
+              });
+              console.log(`Loaded ${existing.rows.length} users from Gist`);
+            }
+
+            // Determine fetch window — only since last refresh
+            const sinceDate = existing && existing.fetchedAt
+              ? new Date(new Date(existing.fetchedAt).getTime() - 5 * 60 * 1000) // 5 min overlap
+              : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000); // 60 days if fresh
+            const createdAfter = sinceDate.toISOString();
+            console.log(`Fetching calls since: ${createdAfter}`);
+
+            // Fetch users and phone numbers
+            const users = await opGetAll('/users');
+            const userById = {};
+            users.forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
+            console.log(`${users.length} users`);
+
+            const phoneNumbers = await opGetAll('/phone-numbers');
+            const numById = {};
+            phoneNumbers.forEach(pn => {
+              (pn.users || []).forEach(pu => {
+                const user = userById[pu.id];
+                if (user && !numById[pn.id]) {
+                  numById[pn.id] = { ...user, number: normNum(pn.number), userId: pu.id };
+                }
+              });
+            });
+            console.log(`${phoneNumbers.length} phone numbers, ${Object.keys(numById).length} mapped`);
+
+            // Fetch new calls for each phone number
+            const seen = new Set();
+            const uniqueNumbers = phoneNumbers.filter(pn => {
+              if (seen.has(pn.id) || !numById[pn.id]) return false;
+              seen.add(pn.id); return true;
+            });
+
+            let totalFetched = 0;
+
+            for (let i = 0; i < uniqueNumbers.length; i++) {
+              const pn = uniqueNumbers[i];
+              const user = numById[pn.id];
+
+              // Get recent conversations
+              let convPage = null;
+              const participantNums = new Set();
+              do {
+                const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50, updatedAfter: createdAfter });
+                if (convPage) p.set('pageToken', convPage);
+                const r = await opGet(`/conversations?${p}`);
+                (r.data || []).forEach(c => (c.participants || []).forEach(pt => participantNums.add(pt)));
+                convPage = r.nextPageToken || null;
+              } while (convPage);
+
+              // Fetch calls per participant
+              for (const participant of participantNums) {
+                let callPage = null;
+                do {
+                  const p = new URLSearchParams({
+                    phoneNumberId: pn.id, participants: participant,
+                    maxResults: 100, createdAfter
+                  });
+                  if (callPage) p.set('pageToken', callPage);
+                  const r = await opGet(`/calls?${p}`);
+                  const calls = r.data || [];
+                  callPage = r.nextPageToken || null;
+
+                  calls.forEach(call => {
+                    if (call.direction !== 'outgoing') return;
+                    const date = new Date(call.createdAt);
+                    if (isNaN(date)) return;
+                    const mk = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+                    const dk = `${mk}-${String(date.getDate()).padStart(2,'0')}`;
+                    if (!pivotData[user.email]) pivotData[user.email] = { ...user, months: {}, days: {} };
+                    if (!pivotData[user.email].days) pivotData[user.email].days = {};
+                    pivotData[user.email].months[mk] = (pivotData[user.email].months[mk] || 0) + 1;
+                    pivotData[user.email].days[dk]   = (pivotData[user.email].days[dk]   || 0) + 1;
+                    totalFetched++;
+                  });
+                } while (callPage);
+              }
+
+              if ((i + 1) % 10 === 0) console.log(`  ${i+1}/${uniqueNumbers.length} numbers, ${totalFetched} new calls`);
+            }
+
+            console.log(`Total new calls fetched: ${totalFetched}`);
+
+            // Build and save payload
+            const rows = Object.values(pivotData);
+            rows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
+            const monthSet = new Set();
+            rows.forEach(u => Object.keys(u.months).forEach(m => monthSet.add(m)));
+            const allMonths = Array.from(monthSet).sort();
+            const totalCalls = rows.reduce((s,u)=>s+u.total,0);
+            const globalMax = rows.length ? Math.max(...rows.flatMap(u=>Object.values(u.months))) : 1;
+            const fetchedAt = new Date().toISOString();
+            const generatedAt = new Date().toLocaleString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+            await saveGist({ rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt });
+            console.log(`Done! ${totalCalls.toLocaleString()} total calls, ${rows.length} users`);
+          }
+
+          main().catch(err => { console.error(err); process.exit(1); });
+          EOF
