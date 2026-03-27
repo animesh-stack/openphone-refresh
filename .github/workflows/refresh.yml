@@ -45,6 +45,7 @@ jobs:
             const r = await request(`${OP_BASE}${path}`, {
               headers: { 'Authorization': OP_KEY }
             });
+            if (r.status === 404) return { data: [], nextPageToken: null }; // skip deleted numbers
             if (r.status !== 200) throw new Error(`OpenPhone API ${r.status}: ${JSON.stringify(r.body)}`);
             return r.body;
           }
