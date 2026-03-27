@@ -108,12 +108,13 @@ jobs:
             }
 
             // Determine fetch window — only since last refresh
-            // Always look back at least 48 hours to avoid missing calls
-            const MIN_LOOKBACK_MS = 48 * 60 * 60 * 1000;
+            // Look back 2 hours beyond last fetch to catch any missed calls
+            // (2 hour overlap prevents gaps if a run is delayed)
+            const OVERLAP_MS = 2 * 60 * 60 * 1000;
             const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
             const lookbackDate = lastFetch
-              ? new Date(Math.min(lastFetch.getTime(), Date.now() - MIN_LOOKBACK_MS))
-              : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+              ? new Date(lastFetch.getTime() - OVERLAP_MS)
+              : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days if no history
             const createdAfter = lookbackDate.toISOString();
             console.log(`Fetching calls since: ${createdAfter}`);
 
