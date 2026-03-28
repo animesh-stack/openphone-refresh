@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenPhone · Outgoing Calls Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #f5f5f2; --surface: #fff; --border: #e2e2da;
+    --accent: #1a1a2e; --indigo: #4f46e5; --muted: #888880; --text: #1a1a1a;
+    --green: #16a34a; --red: #dc2626;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', sans-serif; min-height: 100vh; }
+
+  /* Loading */
+  #loadingScreen {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 100vh; gap: 20px;
+  }
+  .logo { font-size: 2.5rem; }
+  .loading-title { font-size: 1.1rem; font-weight: 700; color: var(--accent); letter-spacing: -0.3px; }
+  .loading-steps {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 28px; min-width: 360px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .lstep { display: flex; align-items: center; gap: 10px; font-size: 0.78rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); transition: color 0.3s; }
+  .lstep.active { color: var(--indigo); font-weight: 600; }
+  .lstep.done { color: var(--green); }
+  .lstep.error { color: var(--red); }
+  .lstep-icon { width: 16px; text-align: center; flex-shrink: 0; }
+  .progress-track { width: 360px; background: var(--border); border-radius: 3px; height: 4px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--indigo), #818cf8); border-radius: 3px; transition: width 0.4s ease; width: 0%; }
+  .loading-sub { font-size: 0.72rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); }
+
+  /* Error */
+  #errorScreen { display: none; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 16px; padding: 24px; }
+  .error-card { background: var(--surface); border: 1px solid #fca5a5; border-radius: 12px; padding: 32px; max-width: 520px; text-align: center; }
+  .error-card h2 { color: var(--red); font-size: 1rem; margin-bottom: 8px; }
+  .error-card p { font-size: 0.78rem; color: var(--muted); font-family: 'IBM Plex Mono', monospace; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
+  .retry-btn { margin-top: 16px; padding: 8px 20px; background: var(--indigo); color: #fff; border: none; border-radius: 6px; font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; }
+
+  /* Dashboard */
+  #dashScreen { display: none; }
+  .top-bar { background: var(--accent); color: #fff; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+  .top-bar-left h1 { font-size: 0.95rem; font-weight: 700; }
+  .top-bar-left p { font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: rgba(255,255,255,0.45); margin-top: 1px; }
+  .top-bar-right { display: flex; align-items: center; gap: 10px; }
+  .gen-badge { font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: rgba(255,255,255,0.4); }
+  .refresh-btn { padding: 6px 14px; background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; transition: background 0.2s; }
+  .refresh-btn:hover { background: rgba(255,255,255,0.22); }
+  .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .stats-bar { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .stat { flex: 1; padding: 14px 20px; border-right: 1px solid var(--border); }
+  .stat:last-child { border-right: none; }
+  .stat-label { font-size: 0.62rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 3px; }
+  .stat-value { font-size: 1.3rem; font-weight: 700; color: var(--indigo); font-family: 'IBM Plex Mono', monospace; }
+
+  .controls { padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .ctrl { display: flex; flex-direction: column; gap: 4px; }
+  .ctrl label { font-size: 0.62rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
+  input[type=text], select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 7px 11px; border-radius: 6px; font-family: 'IBM Plex Sans', sans-serif; font-size: 0.8rem; outline: none; min-width: 150px; }
+  input[type=text]:focus, select:focus { border-color: var(--indigo); }
+  .export-btn { padding: 7px 16px; background: var(--indigo); color: #fff; border: none; border-radius: 6px; font-size: 0.78rem; font-weight: 600; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; align-self: flex-end; }
+  .export-btn:hover { background: #3730a3; }
+
+  .legend { padding: 7px 20px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: center; font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); }
+  .li { display: flex; align-items: center; gap: 3px; }
+  .sw { width: 11px; height: 11px; border-radius: 2px; }
+
+  .table-wrap { overflow: auto; max-height: calc(100vh - 230px); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; white-space: nowrap; }
+  thead tr { background: var(--accent); color: #fff; position: sticky; top: 0; z-index: 10; }
+  thead th { padding: 9px 13px; text-align: left; font-size: 0.62rem; font-family: 'IBM Plex Mono', monospace; font-weight: 500; letter-spacing: 0.5px; border-right: 1px solid rgba(255,255,255,0.08); }
+  thead th.mc { text-align: center; min-width: 50px; }
+  thead th.tc { text-align: center; background: rgba(79,70,229,0.35); min-width: 56px; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+  tbody tr:hover { background: #f0f0ff; }
+  tbody td { padding: 7px 13px; border-right: 1px solid #eee; }
+  td.ec { font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; color: var(--indigo); min-width: 190px; position: sticky; left: 0; background: #fff; z-index: 5; }
+  tbody tr:hover td.ec { background: #f0f0ff; }
+  td.fnc { min-width: 88px; font-weight: 600; }
+  td.lnc { min-width: 88px; color: var(--muted); }
+  td.nc { font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; min-width: 120px; }
+  td.cc { text-align: center; font-family: 'IBM Plex Mono', monospace; font-weight: 500; padding: 7px 4px; }
+  td.totc { text-align: center; font-family: 'IBM Plex Mono', monospace; font-weight: 700; color: var(--indigo); background: #eef2ff; border-left: 2px solid var(--indigo); position: sticky; right: 0; }
+  tbody tr:hover td.totc { background: #e0e7ff; }
+  .no-results { text-align: center; padding: 48px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; }
+
+  /* Refresh toast */
+  .toast { display: none; position: fixed; bottom: 20px; right: 20px; background: var(--accent); color: #fff; border-radius: 10px; padding: 12px 20px; font-size: 0.78rem; font-family: 'IBM Plex Mono', monospace; box-shadow: 0 4px 20px rgba(0,0,0,0.2); z-index: 200; gap: 10px; align-items: center; }
+  .toast.show { display: flex; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin-icon { display: inline-block; animation: spin 0.8s linear infinite; }
+</style>
+</head>
+<body>
+
+<div id="loadingScreen">
+  <div class="logo">📞</div>
+  <div class="loading-title">OpenPhone Dashboard</div>
+  <div class="loading-steps">
+    <div class="lstep" id="ls1"><span class="lstep-icon">○</span> Fetching users</div>
+    <div class="lstep" id="ls2"><span class="lstep-icon">○</span> Fetching phone numbers</div>
+    <div class="lstep" id="ls3"><span class="lstep-icon">○</span> Fetching calls <span id="ls3count" style="margin-left:6px;opacity:0.6;font-size:0.72rem"></span></div>
+    <div class="lstep" id="ls4"><span class="lstep-icon">○</span> Building &amp; saving dashboard</div>
+  </div>
+  <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="loading-sub" id="loadingSub">Starting...</div>
+</div>
+
+<div id="errorScreen">
+  <div class="error-card">
+    <h2>❌ Failed to load data</h2>
+    <p id="errorMsg"></p>
+    <button class="retry-btn" onclick="location.reload()">↺ Retry</button>
+  </div>
+</div>
+
+<div id="dashScreen">
+  <div class="top-bar">
+    <div class="top-bar-left">
+      <h1>📞 OpenPhone · Outgoing Calls Dashboard</h1>
+      <p id="topBarSub">LIVE DATA · OUTGOING CALLS PER USER PER MONTH</p>
+    </div>
+    <div class="top-bar-right">
+      <span class="gen-badge" id="genBadge"></span>
+      <label class="refresh-btn" style="cursor:pointer" title="Upload CSV files to restore historical data">
+        ⬆ Upload CSVs
+        <input type="file" id="csvUploadInput" accept=".csv" multiple style="display:none" onchange="handleCSVUpload(event)">
+      </label>
+      <button class="refresh-btn" id="refreshBtn" onclick="triggerRefresh()">↻ Trigger Refresh</button>
+    </div>
+  </div>
+
+  <!-- Empty state banner shown when no data in Gist -->
+  <div id="emptyBanner" style="display:none;background:#fefce8;border-bottom:2px solid #eab308;padding:16px 24px;gap:16px;align-items:center;flex-wrap:wrap;">
+    <div style="font-size:1.2rem">📂</div>
+    <div style="flex:1">
+      <div style="font-size:0.85rem;font-weight:700;color:#854d0e;margin-bottom:3px">No dashboard data yet</div>
+      <div style="font-size:0.75rem;color:#92400e;font-family:'IBM Plex Mono',monospace">Upload your 3 CSV files to load historical data, or click ↻ Trigger Refresh to fetch via GitHub Actions.</div>
+    </div>
+    <label style="padding:8px 18px;background:#d97706;color:#fff;border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;white-space:nowrap">
+      ⬆ Upload CSVs
+      <input type="file" accept=".csv" multiple style="display:none" onchange="handleCSVUpload(event)">
+    </label>
+    <button onclick="triggerRefresh()" style="padding:8px 18px;background:var(--indigo);color:#fff;border:none;border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;white-space:nowrap">↻ Trigger GitHub Refresh</button>
+  </div>
+
+  <div class="stats-bar" id="statsBar"></div>
+
+  <div class="controls">
+    <div class="ctrl"><label>Search</label><input type="text" id="searchInput" placeholder="Name or email..."></div>
+    <div class="ctrl"><label>Sort by</label>
+      <select id="sortBy">
+        <option value="name">Name A→Z</option>
+        <option value="total_desc">Total Calls ↓</option>
+        <option value="total_asc">Total Calls ↑</option>
+      </select>
+    </div>
+    <div class="ctrl"><label>Heatmap</label>
+      <select id="heatToggle"><option value="on">On</option><option value="off">Off</option></select>
+    </div>
+    <div class="ctrl"><label>Date Range</label>
+      <select id="monthRange" onchange="onQuickRange()">
+        <option value="all">All time</option>
+        <option value="today">Today</option>
+        <option value="yesterday">Yesterday</option>
+        <option value="7">Last 7 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="this_month">This month</option>
+        <option value="last_month">Last month</option>
+        <option value="3m">Last 3 months</option>
+        <option value="6m">Last 6 months</option>
+        <option value="12m">Last 12 months</option>
+        <option value="custom">Custom range...</option>
+      </select>
+    </div>
+    <div class="ctrl" id="dateFromCtrl" style="display:none">
+      <label>From</label>
+      <input type="date" id="dateFrom" onchange="render()" style="min-width:130px">
+    </div>
+    <div class="ctrl" id="dateToCtrl" style="display:none">
+      <label>To</label>
+      <input type="date" id="dateTo" onchange="render()" style="min-width:130px">
+    </div>
+    <button class="export-btn" onclick="exportCSV()">⬇ Export CSV</button>
+  </div>
+
+  <div class="legend">
+    Heat:
+    <span class="li"><span class="sw" style="background:#eef2ff;border:1px solid #ccc"></span>0</span>
+    <span class="li"><span class="sw" style="background:#c7d2fe"></span>low</span>
+    <span class="li"><span class="sw" style="background:#818cf8"></span>mid</span>
+    <span class="li"><span class="sw" style="background:#4f46e5"></span>high</span>
+    <span class="li"><span class="sw" style="background:#3730a3"></span>top</span>
+    <span style="margin-left:auto;font-size:0.65rem;font-family:'IBM Plex Mono',monospace;color:var(--muted)" id="rowCount"></span>
+  </div>
+
+  <div class="table-wrap">
+    <table><thead id="tHead"></thead><tbody id="tBody"></tbody></table>
+  </div>
+</div>
+
+<div class="toast" id="toast">
+  <span class="spin-icon">↻</span>
+  <span id="toastMsg">Refreshing from OpenPhone...</span>
+  <span id="toastProgress" style="opacity:0.6;margin-left:4px;font-size:0.7rem"></span>
+</div>
+
+<script>
+// ── CREDENTIALS ───────────────────────────────────────────────────────────
+const OP_API_KEY   = '8e5a28184160299906028f08cb5ad2fb7976d2e37218610d8e0411ca88669353';
+const GITHUB_TOKEN = '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';
+const GIST_ID      = 'eb3ce9edc8e58d0042a745c0e560b731';
+const GITHUB_REPO   = 'animesh-stack/openphone-refresh';
+const WORKFLOW_FILE = 'refresh.yml';
+const UPLOAD_PASS   = 'codeyoung2024';  // change this to your preferred password
+const OP_BASE      = 'https://api.openphone.com/v1';
+const GIST_FILE    = 'data.json';
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+let dashData = null;
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    setSub('Loading dashboard data...');
+    setProgress(10);
+
+    let cached = null;
+    try { cached = await fetchGist(); } catch(e) {}
+
+    setProgress(80);
+
+    if (cached && cached.rows && cached.rows.length > 0) {
+      dashData = cached;
+      setProgress(100);
+      showDashboard();
+
+      // Check if data is stale (> 1 hour) — if so, refresh silently in background
+      const age = cached.fetchedAt ? Date.now() - new Date(cached.fetchedAt).getTime() : Infinity;
+      const msUntilNextRefresh = age > 15 * 60 * 1000
+        ? 2000  // stale: start immediately (after 2s)
+        : Math.max(5000, 15 * 60 * 1000 - age); // fresh: wait remaining time
+
+      _nextRefreshAt = Date.now() + msUntilNextRefresh;
+      updateBadge();
+
+      setTimeout(() => {
+        silentRefresh();
+        // After first refresh, repeat every hour
+        setInterval(() => {
+          _nextRefreshAt = Date.now() + 15 * 60 * 1000;
+          silentRefresh();
+        }, 15 * 60 * 1000);
+      }, msUntilNextRefresh);
+      return;
+    }
+
+    // No data in Gist yet — show empty dashboard with upload prompt
+    // (GitHub Actions will populate it on next run, or upload CSVs manually)
+    setProgress(100);
+    dashData = { rows: [], allMonths: [], totalCalls: 0, globalMax: 1, generatedAt: null, fetchedAt: null };
+    showDashboard();
+    setTimeout(() => {
+      const banner = document.getElementById('emptyBanner');
+      if (banner) banner.style.display = 'flex';
+    }, 300);
+
+  } catch(err) {
+    showError(err.message);
+  }
+});
+
+// ── Fetch from OpenPhone ──────────────────────────────────────────────────
+async function fetchFromOpenPhone(isRefresh) {
+  if (isRefresh) {
+    document.getElementById('toast').classList.add('show');
+    document.getElementById('refreshBtn').disabled = true;
+    document.getElementById('toastMsg').textContent = 'Fetching from OpenPhone...';
+  }
+
+  try {
+    // 1. Users
+    setStep(1,'active'); setProgress(8); setSub('Fetching users...');
+    const users = await opGetAll('/users');
+    setStep(1,'done');
+    const userById = {};
+    users.forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
+    setSub(`Got ${users.length} users, ${Object.keys(userById).length} mapped`);
+    await new Promise(r => setTimeout(r, 800)); // pause so we can read it
+
+    // 2. Phone numbers
+    setStep(2,'active'); setProgress(18); setSub('Fetching phone numbers...');
+    const phoneNumbers = await opGetAll('/phone-numbers');
+    setStep(2,'done');
+    setSub(`Got ${phoneNumbers.length} phone numbers`);
+    await new Promise(r => setTimeout(r, 800));
+    const numById = {};
+    phoneNumbers.forEach(pn => {
+      // API returns users as a nested array inside each phone number
+      const phoneUsers = pn.users || [];
+      phoneUsers.forEach(pu => {
+        const user = userById[pu.id];
+        if (user) {
+          // Map this phoneNumberId -> user info (use first/primary user)
+          if (!numById[pn.id]) numById[pn.id] = { ...user, number: pn.number, userId: pu.id };
+        }
+      });
+      // Fallback: if users array not present, try direct userId field
+      if (!numById[pn.id] && pn.userId) {
+        const user = userById[pn.userId];
+        if (user) numById[pn.id] = { ...user, number: pn.number };
+      }
+    });
+
+    setSub(`Mapped ${Object.keys(numById).length} numbers to users`);
+    await new Promise(r => setTimeout(r, 800));
+    // 3. Merge: start from existing Gist data (historical CSV data),
+    //    then patch in new calls from API since last fetch date
+    setStep(3,'active'); setProgress(22);
+
+    // Load existing data from Gist to use as base
+    const existing = await fetchGist();
+    const pivotData = {};
+
+    // Seed pivotData from existing historical data (normalize number format)
+    if (existing && existing.rows) {
+      existing.rows.forEach(u => {
+        pivotData[u.email] = { email: u.email, firstName: u.firstName, lastName: u.lastName, number: String(u.number).replace(/[^0-9]/g,''), months: { ...u.months }, days: { ...(u.days||{}) } };
+      });
+    }
+
+    // Determine how far back to fetch from API
+    // Always go back at least 48 hours to avoid missing any calls,
+    // even if Gist was recently updated (clock skew, timezone issues, etc.)
+    const MIN_LOOKBACK_MS = 48 * 60 * 60 * 1000; // 48 hours
+    const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
+    const lookbackDate = lastFetch
+      ? new Date(Math.min(lastFetch.getTime(), Date.now() - MIN_LOOKBACK_MS))
+      : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000); // 60 days if no history
+    const createdAfter = lookbackDate.toISOString();
+
+    // Update existing user info with latest from API (names, numbers may have changed)
+    Object.values(numById).forEach(u => {
+      if (pivotData[u.email]) {
+        pivotData[u.email].firstName = u.firstName;
+        pivotData[u.email].lastName  = u.lastName;
+        pivotData[u.email].number    = String(u.number).replace(/[^0-9]/g,'');
+      }
+    });
+
+    setSub(`Fetching new calls since ${lookbackDate.toLocaleDateString()}...`);
+    let totalFetched = 0;
+
+    // Deduplicate phone numbers
+    const seen = new Set();
+    const uniqueNumbers = phoneNumbers.filter(pn => {
+      if (seen.has(pn.id)) return false;
+      seen.add(pn.id); return numById[pn.id];
+    });
+
+    for (let i = 0; i < uniqueNumbers.length; i++) {
+      const pn = uniqueNumbers[i];
+      const user = numById[pn.id];
+      const pct = 22 + Math.round((i / uniqueNumbers.length) * 68);
+      setProgress(pct);
+      document.getElementById('ls3count').textContent =
+        `(${i+1}/${uniqueNumbers.length} · ${totalFetched.toLocaleString()} new calls)`;
+
+      // New number = not in existing data → fetch ALL their history
+      // Existing number = only fetch since last refresh date
+      // If existing data has rows, check if this user is known
+      // If existing data is empty/missing, treat ALL as existing (fetch recent only)
+      // Only treat as truly new if we have good existing data AND this email is absent
+      const normNum = n => String(n).replace(/[^0-9]/g, '');
+      const hasGoodExisting = existing && existing.rows && existing.rows.length > 0;
+      const isNewNumber = hasGoodExisting && !existing.rows.find(r =>
+        r.email === user.email || normNum(r.number) === normNum(user.number)
+      );
+      const fetchSince = isNewNumber ? null : createdAfter;
+      if (isNewNumber) setSub(`New number detected: ${user.number} — fetching full history...`);
+
+      let convPage = null;
+      const participantNums = new Set();
+      do {
+        const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50 });
+        if (fetchSince) p.set('updatedAfter', fetchSince);
+        if (convPage) p.set('pageToken', convPage);
+        const r = await opFetch(`/conversations?${p}`);
+        (r.data || []).forEach(c => (c.participants || []).forEach(pt => participantNums.add(pt)));
+        convPage = r.nextPageToken || null;
+      } while (convPage);
+
+      // Fetch calls for each participant (parallel batches of 10)
+      const parts = Array.from(participantNums);
+      for (let j = 0; j < parts.length; j += 10) {
+        const batch = parts.slice(j, j + 10);
+        await Promise.all(batch.map(async participant => {
+          let callPage = null;
+          do {
+            const p = new URLSearchParams({
+              phoneNumberId: pn.id, participants: participant, maxResults: 100
+            });
+            if (fetchSince) p.set('createdAfter', fetchSince);
+            if (callPage) p.set('pageToken', callPage);
+            const r = await opFetch(`/calls?${p}`);
+            const calls = r.data || [];
+            callPage = r.nextPageToken || null;
+            calls.forEach(call => {
+              if (call.direction !== 'outgoing') return;
+              const date = new Date(call.createdAt);
+              if (isNaN(date)) return;
+              const mk = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+              const dk = `${mk}-${String(date.getDate()).padStart(2,'0')}`;
+              if (!pivotData[user.email]) pivotData[user.email] = { email: user.email, firstName: user.firstName, lastName: user.lastName, number: String(user.number).replace(/[^0-9]/g,''), months: {}, days: {} };
+              if (!pivotData[user.email].days) pivotData[user.email].days = {};
+              pivotData[user.email].months[mk] = (pivotData[user.email].months[mk] || 0) + 1;
+              pivotData[user.email].days[dk]   = (pivotData[user.email].days[dk]   || 0) + 1;
+              totalFetched++;
+            });
+          } while (callPage);
+        }));
+        document.getElementById('ls3count').textContent =
+          `(${i+1}/${uniqueNumbers.length} · ${totalFetched.toLocaleString()} new calls)`;
+      }
+    }
+    setStep(3,'done');
+
+    // 4. Build & save
+    setStep(4,'active'); setProgress(90); setSub('Building dashboard...');
+    const monthSet = new Set();
+    Object.values(pivotData).forEach(u => Object.keys(u.months).forEach(m => monthSet.add(m)));
+    const allMonths = Array.from(monthSet).sort();
+    const rows = Object.values(pivotData);
+    rows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
+    const totalCalls = rows.reduce((s,u)=>s+u.total,0);
+    const globalMax = rows.length ? Math.max(...rows.flatMap(u=>Object.values(u.months))) : 1;
+    const fetchedAt = new Date().toISOString();
+    const generatedAt = new Date().toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) + ' IST';
+
+    const payload = { rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt };
+
+    setSub('Saving to Gist...'); setProgress(96);
+    await saveGist(payload);
+    setStep(4,'done'); setProgress(100);
+
+    dashData = payload;
+
+    if (isRefresh) {
+      document.getElementById('toast').classList.remove('show');
+      document.getElementById('refreshBtn').disabled = false;
+      document.getElementById('toastProgress').textContent = '';
+      dashData.generatedAt = generatedAt;
+      dashData.fetchedAt = new Date().toISOString();
+      updateBadge();
+      render();
+    } else {
+      setTimeout(() => showDashboard(), 300);
+    }
+
+  } catch(err) {
+    if (isRefresh) {
+      document.getElementById('toast').classList.remove('show');
+      document.getElementById('refreshBtn').disabled = false;
+      alert('Refresh failed: ' + err.message);
+    } else {
+      showError(err.message);
+    }
+  }
+}
+
+// ── OpenPhone API ─────────────────────────────────────────────────────────
+async function opFetch(path) {
+  const res = await fetch(`${OP_BASE}${path}`, {
+    headers: { 'Authorization': OP_API_KEY }
+  });
+  if (res.status === 404) return { data: [], nextPageToken: null }; // skip deleted/inactive numbers
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`OpenPhone API ${res.status}: ${t}`);
+  }
+  return res.json();
+}
+
+async function opGetAll(path) {
+  const results = [];
+  let nextPage = null;
+  do {
+    const sep = path.includes('?') ? '&' : '?';
+    const url = nextPage
+      ? `${path}${sep}maxResults=50&pageToken=${nextPage}`
+      : `${path}?maxResults=50`;
+    const res = await opFetch(url);
+    results.push(...(res.data || []));
+    nextPage = res.nextPageToken || null;
+  } while (nextPage);
+  return results;
+}
+
+// ── GitHub Gist ───────────────────────────────────────────────────────────
+async function fetchGist() {
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+      headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' },
+      signal: controller.signal
+    });
+    clearTimeout(tid);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const raw = json.files?.[GIST_FILE]?.content;
+    if (!raw || raw === '{}') return null;
+    return JSON.parse(raw);
+  } catch(e) { return null; }
+}
+
+async function saveGist(data) {
+  const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' },
+    body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(data) } } })
+  });
+  if (!res.ok) throw new Error(`Gist save failed: ${res.status}`);
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────
+function showDashboard() {
+  show('dashScreen');
+  document.getElementById('genBadge').textContent = dashData.generatedAt ? `Updated ${dashData.generatedAt}` : '';
+  const rangeText = dashData.allMonths && dashData.allMonths.length > 0
+    ? `${fmtM(dashData.allMonths[0])} → ${fmtM(dashData.allMonths[dashData.allMonths.length-1])} · `
+    : '';
+  document.getElementById('topBarSub').textContent = `LIVE DATA · ${rangeText}OUTGOING CALLS PER USER PER MONTH`;
+  // Initialize date range to 'all time'
+  onQuickRange();
+  ['searchInput','sortBy','heatToggle'].forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('change', render);
+    if (id === 'searchInput') el.addEventListener('input', render);
+  });
+}
+
+// ── Trigger GitHub Actions refresh ───────────────────────────────────────
+async function triggerRefresh() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = '↻ Starting...';
+
+  try {
+    // Trigger the workflow_dispatch event
+    const res = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `token ${GITHUB_TOKEN}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ref: 'main' })
+      }
+    );
+
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`GitHub API ${res.status}: ${t}`);
+    }
+
+    // Workflow triggered — now poll Gist every 15s for updated data
+    btn.textContent = '↻ Running... (~1 min)';
+    document.getElementById('toast').classList.add('show');
+    document.getElementById('toastMsg').textContent = 'GitHub Actions is fetching new calls...';
+    document.getElementById('toastProgress').textContent = 'checks every 15s';
+
+    const currentFetchedAt = dashData.fetchedAt;
+    let attempts = 0;
+    const maxAttempts = 30; // 30 × 15s = 7.5 min timeout
+
+    const poll = setInterval(async () => {
+      attempts++;
+      document.getElementById('toastProgress').textContent = `checking... (${attempts * 15}s elapsed)`;
+
+      try {
+        const fresh = await fetchGist();
+        if (fresh && fresh.fetchedAt && fresh.fetchedAt !== currentFetchedAt) {
+          // Data updated!
+          clearInterval(poll);
+          dashData = fresh;
+          document.getElementById('toast').classList.remove('show');
+          btn.disabled = false;
+          btn.textContent = '↻ Trigger Refresh';
+          _nextRefreshAt = Date.now() + 5 * 60 * 1000;
+          updateBadge();
+          render();
+          alert(`✅ Done! Data updated to ${fresh.generatedAt}`);
+        } else if (attempts >= maxAttempts) {
+          clearInterval(poll);
+          document.getElementById('toast').classList.remove('show');
+          btn.disabled = false;
+          btn.textContent = '↻ Trigger Refresh';
+          alert('Timed out waiting for refresh. Check GitHub Actions tab for status.');
+        }
+      } catch(e) { /* keep polling */ }
+    }, 15000);
+
+  } catch(err) {
+    btn.disabled = false;
+    btn.textContent = '↻ Trigger Refresh';
+    alert('Failed to trigger refresh: ' + err.message);
+  }
+}
+
+async function refreshData() { await triggerRefresh(); }
+
+// ── Badge updater ────────────────────────────────────────────────────────
+let _nextRefreshAt = null;
+
+function updateBadge() {
+  if (_refreshing) {
+    document.getElementById('genBadge').textContent = '↻ Refreshing...';
+    return;
+  }
+  if (!dashData || !dashData.generatedAt) return;
+  const badge = document.getElementById('genBadge');
+  if (_nextRefreshAt) {
+    const secsLeft = Math.max(0, Math.round((_nextRefreshAt - Date.now()) / 1000));
+    const mins = Math.floor(secsLeft / 60);
+    const secs = secsLeft % 60;
+    const timeStr = mins > 0 ? `${mins}m` : `${secs}s`;
+    badge.textContent = `Updated ${dashData.generatedAt} · next in ${timeStr}`;
+  } else {
+    badge.textContent = `Updated ${dashData.generatedAt}`;
+  }
+}
+
+// Start a persistent badge ticker (runs once, never resets)
+setInterval(updateBadge, 1000);
+
+// ── Silent background refresh ─────────────────────────────────────────────
+let _refreshing = false;
+async function silentRefresh() {
+  if (_refreshing) return; // prevent concurrent refreshes
+  _refreshing = true;
+
+  const toast = document.getElementById('toast');
+  const toastMsg = document.getElementById('toastMsg');
+
+  toast.classList.add('show');
+  toastMsg.textContent = 'Auto-refreshing data...';
+
+  try {
+    await fetchFromOpenPhone(true);
+    _nextRefreshAt = Date.now() + 15 * 60 * 1000; // next refresh in 15 minutes
+  } catch(e) {
+    toast.classList.remove('show');
+  } finally {
+    _refreshing = false;
+    updateBadge();
+  }
+}
+
+// ── CSV Upload handler ───────────────────────────────────────────────────
+async function handleCSVUpload(event) {
+  // Password protection
+  const entered = prompt('Enter admin password to upload CSV data:');
+  if (entered === null) { event.target.value = ''; return; } // cancelled
+  if (entered !== UPLOAD_PASS) {
+    alert('❌ Incorrect password. CSV upload cancelled.');
+    event.target.value = '';
+    return;
+  }
+
+  const files = Array.from(event.target.files);
+  const callsFile   = files.find(f => f.name.toLowerCase().includes('call'));
+  const numbersFile = files.find(f => f.name.toLowerCase().includes('number'));
+  const usersFile   = files.find(f => f.name.toLowerCase().includes('user'));
+
+  if (!callsFile || !numbersFile || !usersFile) {
+    alert('Please select all 3 files: calls CSV, phone_numbers CSV, and users CSV');
+    return;
+  }
+
+  document.getElementById('refreshBtn').disabled = true;
+  document.getElementById('toast').classList.add('show');
+
+  try {
+    function csvParse(text) {
+      const rows = text.trim().split('\n');
+      const hdrs = rows[0].split(',').map(h => h.trim().replace(/[\r"]/g, ''));
+      return rows.slice(1).map(row => {
+        const cols = row.split(','), obj = {};
+        hdrs.forEach((h, i) => { obj[h] = (cols[i] || '').trim().replace(/[\r"]/g, ''); });
+        return obj;
+      }).filter(r => Object.values(r).some(v => v));
+    }
+    function normN(n) { return String(n).replace(/[^0-9]/g, ''); }
+    function readTxt(f) {
+      return new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = e => res(e.target.result);
+        r.onerror = rej;
+        r.readAsText(f);
+      });
+    }
+
+    document.getElementById('toastMsg').textContent = 'Reading users...';
+    const usersRows = csvParse(await readTxt(usersFile));
+    const userById = {};
+    usersRows.forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
+
+    document.getElementById('toastMsg').textContent = 'Reading phone numbers...';
+    const numRows = csvParse(await readTxt(numbersFile));
+    const numLookup = {};
+    numRows.forEach(r => {
+      const u = userById[r.entityId];
+      if (u) numLookup[normN(r.number)] = { ...u, number: normN(r.number) };
+    });
+
+    document.getElementById('toastMsg').textContent = 'Processing calls CSV...';
+    const callsText = await readTxt(callsFile);
+    const callLines = callsText.trim().split('\n');
+    const hdrs = callLines[0].split(',').map(h => h.trim().replace(/[\r"]/g, ''));
+    const idxDir  = hdrs.indexOf('direction');
+    const idxFrom = hdrs.indexOf('from');
+    const idxDate = hdrs.indexOf('createdAt');
+    const pivotData = {};
+
+    for (let i = 1; i < callLines.length; i++) {
+      const cols = callLines[i].split(',');
+      if ((cols[idxDir] || '').trim().replace(/"/g, '') !== 'outgoing') continue;
+      const rawFrom = (cols[idxFrom] || '').trim().replace(/"/g, '');
+      const dateStr = (cols[idxDate] || '').trim().replace(/"/g, '');
+      const date = new Date(dateStr);
+      if (isNaN(date)) continue;
+      const u = numLookup[normN(rawFrom)];
+      if (!u) continue;
+      // Store both monthly AND daily buckets
+      const mk = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+      const dk = mk + '-' + String(date.getDate()).padStart(2, '0');
+      if (!pivotData[u.email]) pivotData[u.email] = { ...u, months: {}, days: {} };
+      pivotData[u.email].months[mk] = (pivotData[u.email].months[mk] || 0) + 1;
+      pivotData[u.email].days[dk]   = (pivotData[u.email].days[dk]   || 0) + 1;
+      if (i % 50000 === 0) {
+        document.getElementById('toastMsg').textContent = `Processing calls... ${Math.round(i / callLines.length * 100)}%`;
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+
+    const rows = Object.values(pivotData);
+    rows.forEach(u => { u.total = Object.values(u.months).reduce((a, b) => a + b, 0); });
+    const monthSet = new Set();
+    rows.forEach(u => Object.keys(u.months).forEach(m => monthSet.add(m)));
+    const allMonths = Array.from(monthSet).sort();
+    const totalCalls = rows.reduce((s, u) => s + u.total, 0);
+    const globalMax = rows.length ? Math.max(...rows.flatMap(u => Object.values(u.months))) : 1;
+    const fetchedAt = new Date().toISOString();
+    const generatedAt = new Date().toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) + ' IST';
+    const payload = { rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt };
+
+    document.getElementById('toastMsg').textContent = 'Saving to Gist...';
+    await saveGist(payload);
+
+    dashData = payload;
+    document.getElementById('toast').classList.remove('show');
+    document.getElementById('refreshBtn').disabled = false;
+    document.getElementById('emptyBanner').style.display = 'none';
+    showDashboard();
+    alert(`Done! ${totalCalls.toLocaleString()} calls loaded for ${rows.length} users.`);
+  } catch(err) {
+    document.getElementById('toast').classList.remove('show');
+    document.getElementById('refreshBtn').disabled = false;
+    alert('CSV upload failed: ' + err.message);
+  }
+  event.target.value = '';
+}
+
+
+function fmtM(k) {
+  if (!k) return '—';
+  return new Date(k+'-01').toLocaleString('default',{month:'short',year:'2-digit'});
+}
+
+function heat(c,max) {
+  if (!c) return '';
+  const r=c/max;
+  if (r<0.25) return 'background:#c7d2fe;color:#1e1b4b';
+  if (r<0.5)  return 'background:#818cf8;color:#fff';
+  if (r<0.75) return 'background:#4f46e5;color:#fff';
+  return 'background:#3730a3;color:#fff';
+}
+
+// ── Date range helpers ───────────────────────────────────────────────────
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addDays(dateStr, n) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function monthOf(dateStr) {
+  return dateStr.slice(0, 7); // YYYY-MM
+}
+
+function onQuickRange() {
+  const val = document.getElementById('monthRange').value;
+  const fromCtrl = document.getElementById('dateFromCtrl');
+  const toCtrl   = document.getElementById('dateToCtrl');
+  const today    = todayStr();
+
+  // Show/hide custom date inputs
+  const isCustom = val === 'custom';
+  fromCtrl.style.display = isCustom ? '' : 'none';
+  toCtrl.style.display   = isCustom ? '' : 'none';
+
+  if (!isCustom) {
+    // Auto-set date inputs for non-custom ranges so exportCSV works
+    let from, to;
+    if (val === 'all')         { from = dashData.allMonths[0] + '-01'; to = today; }
+    else if (val === 'today')       { from = today; to = today; }
+    else if (val === 'yesterday')   { from = addDays(today, -1); to = addDays(today, -1); }
+    else if (val === '7')           { from = addDays(today, -6); to = today; }
+    else if (val === '30')          { from = addDays(today, -29); to = today; }
+    else if (val === 'this_month')  { from = today.slice(0,7) + '-01'; to = today; }
+    else if (val === 'last_month')  {
+      const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
+      from = d.toISOString().slice(0,7) + '-01';
+      const last = new Date(d.getFullYear(), d.getMonth()+1, 0);
+      to = last.toISOString().slice(0,10);
+    }
+    else if (val === '3m')  { from = addDays(today, -89); to = today; }
+    else if (val === '6m')  { from = addDays(today, -179); to = today; }
+    else if (val === '12m') { from = addDays(today, -364); to = today; }
+    document.getElementById('dateFrom').value = from;
+    document.getElementById('dateTo').value   = to;
+  }
+  render();
+}
+
+function getDateRange() {
+  const from = document.getElementById('dateFrom').value;
+  const to   = document.getElementById('dateTo').value;
+  return { from, to };
+}
+
+// Returns true if we should use daily granularity
+function useDailyMode(from, to) {
+  if (!from || !to) return false;
+  const diff = (new Date(to) - new Date(from)) / (1000*60*60*24);
+  return diff <= 31;
+}
+
+// Generate array of YYYY-MM-DD strings between from and to inclusive
+function getDayRange(from, to) {
+  const days = [];
+  let cur = new Date(from);
+  const end = new Date(to);
+  while (cur <= end) {
+    days.push(cur.toISOString().slice(0,10));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return days;
+}
+
+function fmtDay(d) {
+  // e.g. "2026-03-25" → "25 Mar"
+  const dt = new Date(d);
+  return dt.toLocaleString('default', { day: 'numeric', month: 'short' });
+}
+
+function getVisibleMonths() {
+  const { from, to } = getDateRange();
+  if (!from || !to) return dashData.allMonths;
+  const fromMonth = monthOf(from);
+  const toMonth   = monthOf(to);
+  return dashData.allMonths.filter(m => m >= fromMonth && m <= toMonth);
+}
+
+function render() {
+  const q      = document.getElementById('searchInput').value.toLowerCase().trim();
+  const sort   = document.getElementById('sortBy').value;
+  const doHeat = document.getElementById('heatToggle').value === 'on';
+  const { from, to } = getDateRange();
+  const daily  = useDailyMode(from, to);
+
+  // Columns: daily buckets or monthly buckets
+  const cols   = daily ? getDayRange(from, to) : getVisibleMonths();
+  const getVal = (u, key) => daily ? ((u.days||{})[key]||0) : ((u.months||{})[key]||0);
+  const fmtCol = daily ? fmtDay : fmtM;
+
+  let data = dashData.rows.slice();
+  if (q) data = data.filter(u =>
+    u.email.toLowerCase().includes(q) || u.firstName.toLowerCase().includes(q) ||
+    u.lastName.toLowerCase().includes(q) || u.number.includes(q)
+  );
+
+  // Compute totals for current view
+  data.forEach(u => { u._viewTotal = cols.reduce((a,k) => a + getVal(u,k), 0); });
+
+  if (sort === 'name')            data.sort((a,b) => a.firstName.toLowerCase().localeCompare(b.firstName.toLowerCase()));
+  else if (sort === 'total_desc') data.sort((a,b) => b._viewTotal - a._viewTotal);
+  else                            data.sort((a,b) => a._viewTotal - b._viewTotal);
+
+  const filtTotal = data.reduce((s,u) => s + u._viewTotal, 0);
+
+  // Period label
+  const periodLabel = from && to
+    ? (from === to ? from : `${from} → ${to}`)
+    : (cols.length ? `${fmtCol(cols[0])} → ${fmtCol(cols[cols.length-1])}` : '—');
+
+  // Global max for heatmap in current view
+  const viewMax = data.length ? Math.max(1, ...data.map(u => u._viewTotal)) : 1;
+
+  document.getElementById('statsBar').innerHTML = `
+    <div class="stat"><div class="stat-label">Outgoing Calls (shown)</div><div class="stat-value">${filtTotal.toLocaleString()}</div></div>
+    <div class="stat"><div class="stat-label">Total All Time</div><div class="stat-value">${dashData.totalCalls.toLocaleString()}</div></div>
+    <div class="stat"><div class="stat-label">Users</div><div class="stat-value">${data.length} / ${dashData.rows.length}</div></div>
+    <div class="stat"><div class="stat-label">Period</div><div class="stat-value" style="font-size:0.78rem">${periodLabel}</div></div>
+  `;
+  document.getElementById('rowCount').textContent = `${data.length} users`;
+
+  document.getElementById('tHead').innerHTML = `<tr>
+    <th>Email</th><th>First</th><th>Last</th><th>Number</th>
+    ${cols.map(k => `<th class="mc">${fmtCol(k)}</th>`).join('')}
+    <th class="tc">TOTAL</th>
+  </tr>`;
+
+  if (!data.length) {
+    document.getElementById('tBody').innerHTML = '<tr><td colspan="100" class="no-results">No users match your search.</td></tr>';
+    return;
+  }
+
+  document.getElementById('tBody').innerHTML = data.map(u => {
+    const cells = cols.map(k => {
+      const c = getVal(u, k);
+      const s = doHeat ? heat(c, viewMax) : '';
+      return `<td class="cc" style="${s}" title="${fmtCol(k)}: ${c}">${c||''}</td>`;
+    }).join('');
+    return `<tr>
+      <td class="ec">${u.email}</td><td class="fnc">${u.firstName}</td>
+      <td class="lnc">${u.lastName}</td><td class="nc">${u.number}</td>
+      ${cells}<td class="totc">${u._viewTotal.toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+}
+
+function exportCSV() {
+  const { from, to } = getDateRange();
+  const daily = useDailyMode(from, to);
+  const cols  = daily ? getDayRange(from, to) : getVisibleMonths();
+  const getVal = (u, key) => daily ? ((u.days||{})[key]||0) : ((u.months||{})[key]||0);
+  const fmtCol = daily ? (d => d) : fmtM; // use full date string for daily export
+
+  const header = ['email','firstName','lastName','number',...cols.map(fmtCol),'TOTAL'];
+  const lines = [header.join(',')];
+  dashData.rows.slice()
+    .sort((a,b) => a.firstName.toLowerCase().localeCompare(b.firstName.toLowerCase()))
+    .forEach(u => {
+      const vt = cols.reduce((a,k) => a + getVal(u,k), 0);
+      lines.push([u.email, u.firstName, u.lastName, u.number, ...cols.map(k => getVal(u,k)), vt].join(','));
+    });
+  const fname = from && to ? `openphone_calls_${from}_to_${to}.csv` : 'openphone_calls.csv';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type:'text/csv'}));
+  a.download = fname; a.click();
+}
+
+function show(id) {
+  ['loadingScreen','errorScreen','dashScreen'].forEach(s => {
+    document.getElementById(s).style.display = s===id?(s==='dashScreen'?'block':'flex'):'none';
+  });
+}
+function setStep(n,state) {
+  const el=document.getElementById(`ls${n}`);
+  el.className=`lstep ${state}`;
+  el.querySelector('.lstep-icon').textContent=state==='done'?'✓':state==='error'?'✗':state==='active'?'▶':'○';
+}
+function setProgress(pct) { document.getElementById('progressFill').style.width=pct+'%'; }
+function setSub(msg) { document.getElementById('loadingSub').textContent=msg; }
+function showError(msg) { document.getElementById('errorMsg').textContent=msg; show('errorScreen'); }
+</script>
+</body>
+</html>
