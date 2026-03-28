@@ -133,7 +133,7 @@
         ⬆ Upload CSVs
         <input type="file" id="csvUploadInput" accept=".csv" multiple style="display:none" onchange="handleCSVUpload(event)">
       </label>
-      <button class="refresh-btn" id="refreshBtn" onclick="triggerRefresh()">↻ Trigger Refresh</button>
+      <button class="refresh-btn" id="refreshBtn" onclick="triggerRefresh()">↻ Check for updates</button>
     </div>
   </div>
 
@@ -213,16 +213,11 @@
 </div>
 
 <script>
-// ── CREDENTIALS ───────────────────────────────────────────────────────────
-const OP_API_KEY   = '8e5a28184160299906028f08cb5ad2fb7976d2e37218610d8e0411ca88669353';
-const GITHUB_TOKEN = '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';
-const GIST_ID      = 'eb3ce9edc8e58d0042a745c0e560b731';
-const GITHUB_REPO   = 'animesh-stack/openphone-refresh';
-const WORKFLOW_FILE = 'refresh.yml';
-const UPLOAD_PASS   = 'codeyoung2024';  // change this to your preferred password
-const OP_BASE      = 'https://api.openphone.com/v1';
-const GIST_FILE    = 'data.json';
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+// ── CONFIG (no secrets here — tokens live only in GitHub Actions secrets) ──
+const GIST_ID       = 'eb3ce9edc8e58d0042a745c0e560b731'; // public gist - read only
+const UPLOAD_PASS   = 'codeyoung2024'; // password to protect CSV upload UI
+const GIST_FILE     = 'data.json';
+const CACHE_TTL_MS  = 15 * 60 * 1000; // 15 minutes
 
 let dashData = null;
 
@@ -277,239 +272,16 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 });
 
-// ── Fetch from OpenPhone ──────────────────────────────────────────────────
-async function fetchFromOpenPhone(isRefresh) {
-  if (isRefresh) {
-    document.getElementById('toast').classList.add('show');
-    document.getElementById('refreshBtn').disabled = true;
-    document.getElementById('toastMsg').textContent = 'Fetching from OpenPhone...';
-  }
-
-  try {
-    // 1. Users
-    setStep(1,'active'); setProgress(8); setSub('Fetching users...');
-    const users = await opGetAll('/users');
-    setStep(1,'done');
-    const userById = {};
-    users.forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
-    setSub(`Got ${users.length} users, ${Object.keys(userById).length} mapped`);
-    await new Promise(r => setTimeout(r, 800)); // pause so we can read it
-
-    // 2. Phone numbers
-    setStep(2,'active'); setProgress(18); setSub('Fetching phone numbers...');
-    const phoneNumbers = await opGetAll('/phone-numbers');
-    setStep(2,'done');
-    setSub(`Got ${phoneNumbers.length} phone numbers`);
-    await new Promise(r => setTimeout(r, 800));
-    const numById = {};
-    phoneNumbers.forEach(pn => {
-      // API returns users as a nested array inside each phone number
-      const phoneUsers = pn.users || [];
-      phoneUsers.forEach(pu => {
-        const user = userById[pu.id];
-        if (user) {
-          // Map this phoneNumberId -> user info (use first/primary user)
-          if (!numById[pn.id]) numById[pn.id] = { ...user, number: pn.number, userId: pu.id };
-        }
-      });
-      // Fallback: if users array not present, try direct userId field
-      if (!numById[pn.id] && pn.userId) {
-        const user = userById[pn.userId];
-        if (user) numById[pn.id] = { ...user, number: pn.number };
-      }
-    });
-
-    setSub(`Mapped ${Object.keys(numById).length} numbers to users`);
-    await new Promise(r => setTimeout(r, 800));
-    // 3. Merge: start from existing Gist data (historical CSV data),
-    //    then patch in new calls from API since last fetch date
-    setStep(3,'active'); setProgress(22);
-
-    // Load existing data from Gist to use as base
-    const existing = await fetchGist();
-    const pivotData = {};
-
-    // Seed pivotData from existing historical data (normalize number format)
-    if (existing && existing.rows) {
-      existing.rows.forEach(u => {
-        pivotData[u.email] = { email: u.email, firstName: u.firstName, lastName: u.lastName, number: String(u.number).replace(/[^0-9]/g,''), months: { ...u.months }, days: { ...(u.days||{}) } };
-      });
-    }
-
-    // Determine how far back to fetch from API
-    // Always go back at least 48 hours to avoid missing any calls,
-    // even if Gist was recently updated (clock skew, timezone issues, etc.)
-    const MIN_LOOKBACK_MS = 48 * 60 * 60 * 1000; // 48 hours
-    const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
-    const lookbackDate = lastFetch
-      ? new Date(Math.min(lastFetch.getTime(), Date.now() - MIN_LOOKBACK_MS))
-      : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000); // 60 days if no history
-    const createdAfter = lookbackDate.toISOString();
-
-    // Update existing user info with latest from API (names, numbers may have changed)
-    Object.values(numById).forEach(u => {
-      if (pivotData[u.email]) {
-        pivotData[u.email].firstName = u.firstName;
-        pivotData[u.email].lastName  = u.lastName;
-        pivotData[u.email].number    = String(u.number).replace(/[^0-9]/g,'');
-      }
-    });
-
-    setSub(`Fetching new calls since ${lookbackDate.toLocaleDateString()}...`);
-    let totalFetched = 0;
-
-    // Deduplicate phone numbers
-    const seen = new Set();
-    const uniqueNumbers = phoneNumbers.filter(pn => {
-      if (seen.has(pn.id)) return false;
-      seen.add(pn.id); return numById[pn.id];
-    });
-
-    for (let i = 0; i < uniqueNumbers.length; i++) {
-      const pn = uniqueNumbers[i];
-      const user = numById[pn.id];
-      const pct = 22 + Math.round((i / uniqueNumbers.length) * 68);
-      setProgress(pct);
-      document.getElementById('ls3count').textContent =
-        `(${i+1}/${uniqueNumbers.length} · ${totalFetched.toLocaleString()} new calls)`;
-
-      // New number = not in existing data → fetch ALL their history
-      // Existing number = only fetch since last refresh date
-      // If existing data has rows, check if this user is known
-      // If existing data is empty/missing, treat ALL as existing (fetch recent only)
-      // Only treat as truly new if we have good existing data AND this email is absent
-      const normNum = n => String(n).replace(/[^0-9]/g, '');
-      const hasGoodExisting = existing && existing.rows && existing.rows.length > 0;
-      const isNewNumber = hasGoodExisting && !existing.rows.find(r =>
-        r.email === user.email || normNum(r.number) === normNum(user.number)
-      );
-      const fetchSince = isNewNumber ? null : createdAfter;
-      if (isNewNumber) setSub(`New number detected: ${user.number} — fetching full history...`);
-
-      let convPage = null;
-      const participantNums = new Set();
-      do {
-        const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50 });
-        if (fetchSince) p.set('updatedAfter', fetchSince);
-        if (convPage) p.set('pageToken', convPage);
-        const r = await opFetch(`/conversations?${p}`);
-        (r.data || []).forEach(c => (c.participants || []).forEach(pt => participantNums.add(pt)));
-        convPage = r.nextPageToken || null;
-      } while (convPage);
-
-      // Fetch calls for each participant (parallel batches of 10)
-      const parts = Array.from(participantNums);
-      for (let j = 0; j < parts.length; j += 10) {
-        const batch = parts.slice(j, j + 10);
-        await Promise.all(batch.map(async participant => {
-          let callPage = null;
-          do {
-            const p = new URLSearchParams({
-              phoneNumberId: pn.id, participants: participant, maxResults: 100
-            });
-            if (fetchSince) p.set('createdAfter', fetchSince);
-            if (callPage) p.set('pageToken', callPage);
-            const r = await opFetch(`/calls?${p}`);
-            const calls = r.data || [];
-            callPage = r.nextPageToken || null;
-            calls.forEach(call => {
-              if (call.direction !== 'outgoing') return;
-              const date = new Date(call.createdAt);
-              if (isNaN(date)) return;
-              const mk = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
-              const dk = `${mk}-${String(date.getDate()).padStart(2,'0')}`;
-              if (!pivotData[user.email]) pivotData[user.email] = { email: user.email, firstName: user.firstName, lastName: user.lastName, number: String(user.number).replace(/[^0-9]/g,''), months: {}, days: {} };
-              if (!pivotData[user.email].days) pivotData[user.email].days = {};
-              pivotData[user.email].months[mk] = (pivotData[user.email].months[mk] || 0) + 1;
-              pivotData[user.email].days[dk]   = (pivotData[user.email].days[dk]   || 0) + 1;
-              totalFetched++;
-            });
-          } while (callPage);
-        }));
-        document.getElementById('ls3count').textContent =
-          `(${i+1}/${uniqueNumbers.length} · ${totalFetched.toLocaleString()} new calls)`;
-      }
-    }
-    setStep(3,'done');
-
-    // 4. Build & save
-    setStep(4,'active'); setProgress(90); setSub('Building dashboard...');
-    const monthSet = new Set();
-    Object.values(pivotData).forEach(u => Object.keys(u.months).forEach(m => monthSet.add(m)));
-    const allMonths = Array.from(monthSet).sort();
-    const rows = Object.values(pivotData);
-    rows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
-    const totalCalls = rows.reduce((s,u)=>s+u.total,0);
-    const globalMax = rows.length ? Math.max(...rows.flatMap(u=>Object.values(u.months))) : 1;
-    const fetchedAt = new Date().toISOString();
-    const generatedAt = new Date().toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) + ' IST';
-
-    const payload = { rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt };
-
-    setSub('Saving to Gist...'); setProgress(96);
-    await saveGist(payload);
-    setStep(4,'done'); setProgress(100);
-
-    dashData = payload;
-
-    if (isRefresh) {
-      document.getElementById('toast').classList.remove('show');
-      document.getElementById('refreshBtn').disabled = false;
-      document.getElementById('toastProgress').textContent = '';
-      dashData.generatedAt = generatedAt;
-      dashData.fetchedAt = new Date().toISOString();
-      updateBadge();
-      render();
-    } else {
-      setTimeout(() => showDashboard(), 300);
-    }
-
-  } catch(err) {
-    if (isRefresh) {
-      document.getElementById('toast').classList.remove('show');
-      document.getElementById('refreshBtn').disabled = false;
-      alert('Refresh failed: ' + err.message);
-    } else {
-      showError(err.message);
-    }
-  }
-}
-
-// ── OpenPhone API ─────────────────────────────────────────────────────────
-async function opFetch(path) {
-  const res = await fetch(`${OP_BASE}${path}`, {
-    headers: { 'Authorization': OP_API_KEY }
-  });
-  if (res.status === 404) return { data: [], nextPageToken: null }; // skip deleted/inactive numbers
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`OpenPhone API ${res.status}: ${t}`);
-  }
-  return res.json();
-}
-
-async function opGetAll(path) {
-  const results = [];
-  let nextPage = null;
-  do {
-    const sep = path.includes('?') ? '&' : '?';
-    const url = nextPage
-      ? `${path}${sep}maxResults=50&pageToken=${nextPage}`
-      : `${path}?maxResults=50`;
-    const res = await opFetch(url);
-    results.push(...(res.data || []));
-    nextPage = res.nextPageToken || null;
-  } while (nextPage);
-  return results;
-}
+// OpenPhone API calls handled by GitHub Actions only — not from browser
 
 // ── GitHub Gist ───────────────────────────────────────────────────────────
 async function fetchGist() {
   try {
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), 8000);
+    // Public gist — no auth token needed, safe to use in public HTML
     const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-      headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' },
+      headers: { 'Accept': 'application/vnd.github.v3+json' },
       signal: controller.signal
     });
     clearTimeout(tid);
@@ -522,12 +294,11 @@ async function fetchGist() {
 }
 
 async function saveGist(data) {
-  const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' },
-    body: JSON.stringify({ files: { [GIST_FILE]: { content: JSON.stringify(data) } } })
-  });
-  if (!res.ok) throw new Error(`Gist save failed: ${res.status}`);
+  // Browser cannot write to Gist without exposing token
+  // GitHub Actions handles all writes — this is a no-op in browser
+  console.log('saveGist called from browser — skipped (GitHub Actions handles writes)');
+  // Store locally so dashboard updates immediately for this session
+  dashData = data;
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
@@ -547,74 +318,42 @@ function showDashboard() {
   });
 }
 
-// ── Trigger GitHub Actions refresh ───────────────────────────────────────
+// ── Check for updates — polls Gist until GitHub Actions updates it ────────
 async function triggerRefresh() {
   const btn = document.getElementById('refreshBtn');
   btn.disabled = true;
-  btn.textContent = '↻ Starting...';
+  btn.textContent = '↻ Checking...';
+  document.getElementById('toast').classList.add('show');
+  document.getElementById('toastMsg').textContent = 'Checking for new data...';
+  document.getElementById('toastProgress').textContent = 'GitHub Actions runs every 15 min';
 
-  try {
-    // Trigger the workflow_dispatch event
-    const res = await fetch(
-      `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `token ${GITHUB_TOKEN}`,
-          'Accept': 'application/vnd.github.v3+json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ ref: 'main' })
+  const currentFetchedAt = dashData ? dashData.fetchedAt : null;
+  let attempts = 0;
+  const maxAttempts = 40; // 40 × 15s = 10 min max wait
+
+  const poll = setInterval(async () => {
+    attempts++;
+    document.getElementById('toastProgress').textContent = `checking... (${attempts * 15}s elapsed)`;
+    try {
+      const fresh = await fetchGist();
+      if (fresh && fresh.fetchedAt && fresh.fetchedAt !== currentFetchedAt) {
+        clearInterval(poll);
+        dashData = fresh;
+        document.getElementById('toast').classList.remove('show');
+        btn.disabled = false;
+        btn.textContent = '↻ Check for updates';
+        _nextRefreshAt = Date.now() + 15 * 60 * 1000;
+        updateBadge();
+        render();
+      } else if (attempts >= maxAttempts) {
+        clearInterval(poll);
+        document.getElementById('toast').classList.remove('show');
+        btn.disabled = false;
+        btn.textContent = '↻ Check for updates';
+        alert('No new data yet — GitHub Actions will update automatically every 15 min.');
       }
-    );
-
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`GitHub API ${res.status}: ${t}`);
-    }
-
-    // Workflow triggered — now poll Gist every 15s for updated data
-    btn.textContent = '↻ Running... (~1 min)';
-    document.getElementById('toast').classList.add('show');
-    document.getElementById('toastMsg').textContent = 'GitHub Actions is fetching new calls...';
-    document.getElementById('toastProgress').textContent = 'checks every 15s';
-
-    const currentFetchedAt = dashData.fetchedAt;
-    let attempts = 0;
-    const maxAttempts = 30; // 30 × 15s = 7.5 min timeout
-
-    const poll = setInterval(async () => {
-      attempts++;
-      document.getElementById('toastProgress').textContent = `checking... (${attempts * 15}s elapsed)`;
-
-      try {
-        const fresh = await fetchGist();
-        if (fresh && fresh.fetchedAt && fresh.fetchedAt !== currentFetchedAt) {
-          // Data updated!
-          clearInterval(poll);
-          dashData = fresh;
-          document.getElementById('toast').classList.remove('show');
-          btn.disabled = false;
-          btn.textContent = '↻ Trigger Refresh';
-          _nextRefreshAt = Date.now() + 5 * 60 * 1000;
-          updateBadge();
-          render();
-          alert(`✅ Done! Data updated to ${fresh.generatedAt}`);
-        } else if (attempts >= maxAttempts) {
-          clearInterval(poll);
-          document.getElementById('toast').classList.remove('show');
-          btn.disabled = false;
-          btn.textContent = '↻ Trigger Refresh';
-          alert('Timed out waiting for refresh. Check GitHub Actions tab for status.');
-        }
-      } catch(e) { /* keep polling */ }
-    }, 15000);
-
-  } catch(err) {
-    btn.disabled = false;
-    btn.textContent = '↻ Trigger Refresh';
-    alert('Failed to trigger refresh: ' + err.message);
-  }
+    } catch(e) {}
+  }, 15000);
 }
 
 async function refreshData() { await triggerRefresh(); }
@@ -643,24 +382,20 @@ function updateBadge() {
 // Start a persistent badge ticker (runs once, never resets)
 setInterval(updateBadge, 1000);
 
-// ── Silent background refresh ─────────────────────────────────────────────
+// ── Silent background refresh — just polls Gist for new data ─────────────
 let _refreshing = false;
 async function silentRefresh() {
-  if (_refreshing) return; // prevent concurrent refreshes
+  if (_refreshing) return;
   _refreshing = true;
-
-  const toast = document.getElementById('toast');
-  const toastMsg = document.getElementById('toastMsg');
-
-  toast.classList.add('show');
-  toastMsg.textContent = 'Auto-refreshing data...';
-
   try {
-    await fetchFromOpenPhone(true);
-    _nextRefreshAt = Date.now() + 15 * 60 * 1000; // next refresh in 15 minutes
-  } catch(e) {
-    toast.classList.remove('show');
-  } finally {
+    const fresh = await fetchGist();
+    if (fresh && fresh.fetchedAt && (!dashData || fresh.fetchedAt !== dashData.fetchedAt)) {
+      dashData = fresh;
+      render();
+    }
+    _nextRefreshAt = Date.now() + 15 * 60 * 1000;
+  } catch(e) {}
+  finally {
     _refreshing = false;
     updateBadge();
   }
@@ -764,15 +499,21 @@ async function handleCSVUpload(event) {
     const generatedAt = new Date().toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) + ' IST';
     const payload = { rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt };
 
-    document.getElementById('toastMsg').textContent = 'Saving to Gist...';
-    await saveGist(payload);
-
+    // Save processed data — GitHub Actions will pick it up via the yml file
+    // For now show dashboard locally and offer download of processed JSON
     dashData = payload;
     document.getElementById('toast').classList.remove('show');
     document.getElementById('refreshBtn').disabled = false;
     document.getElementById('emptyBanner').style.display = 'none';
     showDashboard();
-    alert(`Done! ${totalCalls.toLocaleString()} calls loaded for ${rows.length} users.`);
+
+    // Also offer to download the processed data.json so it can be uploaded to Gist manually
+    const blob = new Blob([JSON.stringify(payload)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'data.json';
+    a.click();
+    alert(`✅ Done! ${totalCalls.toLocaleString()} calls for ${rows.length} users.\n\nA data.json file was downloaded — upload it to your Gist (gist.github.com/${GIST_ID}) to make it permanent for everyone.`);
   } catch(err) {
     document.getElementById('toast').classList.remove('show');
     document.getElementById('refreshBtn').disabled = false;
