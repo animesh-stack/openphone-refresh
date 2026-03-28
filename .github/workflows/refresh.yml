@@ -46,13 +46,28 @@ jobs:
             });
           }
 
-          async function opGet(path) {
-            const r = await request(`${OP_BASE}${path}`, {
-              headers: { 'Authorization': OP_KEY }
-            });
-            if (r.status === 404) return { data: [], nextPageToken: null }; // skip deleted numbers
-            if (r.status !== 200) throw new Error(`OpenPhone API ${r.status}: ${JSON.stringify(r.body)}`);
-            return r.body;
+          async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+          async function opGet(path, retries = 4) {
+            for (let attempt = 0; attempt <= retries; attempt++) {
+              try {
+                const r = await request(`${OP_BASE}${path}`, {
+                  headers: { 'Authorization': OP_KEY }
+                });
+                if (r.status === 404) return { data: [], nextPageToken: null };
+                if (r.status === 429) { // rate limited
+                  await sleep(5000 * (attempt + 1));
+                  continue;
+                }
+                if (r.status !== 200) throw new Error(`OpenPhone API ${r.status}: ${JSON.stringify(r.body)}`);
+                return r.body;
+              } catch(e) {
+                if (attempt === retries) throw e;
+                const wait = 3000 * (attempt + 1);
+                console.log(`  Retry ${attempt + 1}/${retries} after ${wait}ms: ${e.message.slice(0,60)}`);
+                await sleep(wait);
+              }
+            }
           }
 
           async function opGetAll(path) {
@@ -178,8 +193,11 @@ jobs:
                 convPage = r.nextPageToken || null;
               } while (convPage);
 
-              // Fetch calls per participant in parallel
-              await Promise.all(Array.from(participantNums).map(async participant => {
+              // Fetch calls per participant in parallel batches of 3
+              const parts = Array.from(participantNums);
+              for (let pi = 0; pi < parts.length; pi += 3) {
+                const pbatch = parts.slice(pi, pi + 3);
+                await Promise.all(pbatch.map(async participant => {
                 let callPage = null;
                 do {
                   const p = new URLSearchParams({
@@ -203,15 +221,28 @@ jobs:
                     totalFetched++;
                   });
                 } while (callPage);
-              }));
+                }));
+              }
             }
 
-            // Process 5 numbers in parallel
-            const BATCH = 5;
-            for (let i = 0; i < uniqueNumbers.length; i += BATCH) {
-              const batch = uniqueNumbers.slice(i, i + BATCH);
-              await Promise.all(batch.map(pn => processNumber(pn)));
-              console.log(`  ${Math.min(i + BATCH, uniqueNumbers.length)}/${uniqueNumbers.length} numbers, ${totalFetched} calls`);
+            // Process sequentially with small delay to avoid rate limiting
+            for (let i = 0; i < uniqueNumbers.length; i++) {
+              await processNumber(uniqueNumbers[i]);
+              if ((i + 1) % 5 === 0) {
+                console.log(`  ${i+1}/${uniqueNumbers.length} numbers, ${totalFetched} calls`);
+                // Save progress every 10 numbers so we don't lose everything on timeout
+                if ((i + 1) % 10 === 0) {
+                  const partialRows = Object.values(pivotData);
+                  partialRows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
+                  const ms = new Set(); partialRows.forEach(u => Object.keys(u.months).forEach(m => ms.add(m)));
+                  const partialMonths = Array.from(ms).sort();
+                  const partialTotal = partialRows.reduce((s,u)=>s+u.total,0);
+                  const partialMax = partialRows.length ? Math.max(...partialRows.flatMap(u=>Object.values(u.months))) : 1;
+                  await saveGist({ rows: partialRows, allMonths: partialMonths, totalCalls: partialTotal, globalMax: partialMax, fetchedAt: new Date().toISOString(), generatedAt: 'Refreshing...' });
+                  console.log(`  Checkpoint saved: ${partialTotal.toLocaleString()} calls, ${partialRows.length} users`);
+                }
+              }
+              await sleep(200); // 200ms between numbers to avoid rate limiting
             }
 
             console.log(`Total new calls fetched: ${totalFetched}`);
