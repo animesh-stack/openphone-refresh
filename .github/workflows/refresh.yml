@@ -108,13 +108,17 @@ jobs:
             }
 
             // Determine fetch window — only since last refresh
-            // Look back 10 minutes beyond last fetch to catch any missed calls
-            const OVERLAP_MS = 20 * 60 * 1000; // 20 min overlap to be safe
+            // Smart lookback:
+            // - If Gist has good data (118 users) → only fetch last 20 min overlap
+            // - If Gist has bad/incomplete data (<100 users) → fetch full history
+            const hasGoodData = existing && existing.rows && existing.rows.length >= 100;
+            const OVERLAP_MS = 20 * 60 * 1000;
             const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
-            const lookbackDate = lastFetch
+            const lookbackDate = hasGoodData && lastFetch
               ? new Date(lastFetch.getTime() - OVERLAP_MS)
-              : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days if no history
+              : new Date('2024-06-01T00:00:00Z'); // full history if data is incomplete
             const createdAfter = lookbackDate.toISOString();
+            console.log(hasGoodData ? `Incremental fetch since ${createdAfter}` : 'Full history fetch — incomplete data detected');
             console.log(`Fetching calls since: ${createdAfter}`);
 
             // Fetch users and phone numbers
