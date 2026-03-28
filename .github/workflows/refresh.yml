@@ -5,9 +5,14 @@ on:
     - cron: '*/15 * * * *'  # Every 15 minutes
   workflow_dispatch:        # Allow manual trigger from GitHub UI
 
+concurrency:
+  group: openphone-refresh  # Only one run at a time
+  cancel-in-progress: true  # Cancel old run if new one starts
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 30     # Kill if takes longer than 30 min
 
     steps:
       - name: Fetch from OpenPhone API and update Gist
@@ -150,7 +155,7 @@ jobs:
             });
             console.log('Updated user info from API');
 
-            // Fetch new calls for each phone number
+            // Fetch calls — parallel batches of 5 numbers at a time
             const seen = new Set();
             const uniqueNumbers = phoneNumbers.filter(pn => {
               if (seen.has(pn.id) || !numById[pn.id]) return false;
@@ -159,23 +164,22 @@ jobs:
 
             let totalFetched = 0;
 
-            for (let i = 0; i < uniqueNumbers.length; i++) {
-              const pn = uniqueNumbers[i];
+            async function processNumber(pn) {
               const user = numById[pn.id];
-
-              // Get recent conversations
+              // Get conversations for this number
               let convPage = null;
               const participantNums = new Set();
               do {
-                const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50, updatedAfter: createdAfter });
+                const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50 });
+                if (createdAfter > '2024-06-02') p.set('updatedAfter', createdAfter);
                 if (convPage) p.set('pageToken', convPage);
                 const r = await opGet(`/conversations?${p}`);
                 (r.data || []).forEach(c => (c.participants || []).forEach(pt => participantNums.add(pt)));
                 convPage = r.nextPageToken || null;
               } while (convPage);
 
-              // Fetch calls per participant
-              for (const participant of participantNums) {
+              // Fetch calls per participant in parallel
+              await Promise.all(Array.from(participantNums).map(async participant => {
                 let callPage = null;
                 do {
                   const p = new URLSearchParams({
@@ -186,7 +190,6 @@ jobs:
                   const r = await opGet(`/calls?${p}`);
                   const calls = r.data || [];
                   callPage = r.nextPageToken || null;
-
                   calls.forEach(call => {
                     if (call.direction !== 'outgoing') return;
                     const date = new Date(call.createdAt);
@@ -200,9 +203,15 @@ jobs:
                     totalFetched++;
                   });
                 } while (callPage);
-              }
+              }));
+            }
 
-              if ((i + 1) % 10 === 0) console.log(`  ${i+1}/${uniqueNumbers.length} numbers, ${totalFetched} new calls`);
+            // Process 5 numbers in parallel
+            const BATCH = 5;
+            for (let i = 0; i < uniqueNumbers.length; i += BATCH) {
+              const batch = uniqueNumbers.slice(i, i + BATCH);
+              await Promise.all(batch.map(pn => processNumber(pn)));
+              console.log(`  ${Math.min(i + BATCH, uniqueNumbers.length)}/${uniqueNumbers.length} numbers, ${totalFetched} calls`);
             }
 
             console.log(`Total new calls fetched: ${totalFetched}`);
