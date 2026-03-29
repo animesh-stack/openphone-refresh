@@ -12,7 +12,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 30     # Kill if takes longer than 30 min
+    timeout-minutes: 60     # Kill if takes longer than 60 min
 
     steps:
       - name: Fetch from OpenPhone API and update Gist
@@ -129,16 +129,18 @@ jobs:
 
             // Determine fetch window — only since last refresh
             // Smart lookback:
-            // - If Gist has good data (118 users) → only fetch last 20 min overlap
-            // - If Gist has bad/incomplete data (<100 users) → fetch full history
-            const hasGoodData = existing && existing.rows && existing.rows.length >= 100;
+            // - Good data (>=118 users) → incremental from last fetch
+            // - Incomplete data → full history, but resume from last checkpoint if available
+            const hasGoodData = existing && existing.rows && existing.rows.length >= 118;
             const OVERLAP_MS = 20 * 60 * 1000;
             const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
+            const resumeFromIndex = (!hasGoodData && existing && existing._resumeIndex) ? existing._resumeIndex : 0;
             const lookbackDate = hasGoodData && lastFetch
               ? new Date(lastFetch.getTime() - OVERLAP_MS)
-              : new Date('2024-06-01T00:00:00Z'); // full history if data is incomplete
+              : new Date('2024-06-01T00:00:00Z');
             const createdAfter = lookbackDate.toISOString();
-            console.log(hasGoodData ? `Incremental fetch since ${createdAfter}` : 'Full history fetch — incomplete data detected');
+            if (hasGoodData) console.log(`Incremental fetch since ${createdAfter}`);
+            else console.log(`Full history fetch — ${resumeFromIndex > 0 ? 'resuming from number ' + resumeFromIndex : 'starting fresh'}`);
             console.log(`Fetching calls since: ${createdAfter}`);
 
             // Fetch users and phone numbers
@@ -225,24 +227,25 @@ jobs:
               }
             }
 
-            // Process sequentially with small delay to avoid rate limiting
-            for (let i = 0; i < uniqueNumbers.length; i++) {
+            // Process sequentially — skip already-processed numbers if resuming
+            for (let i = resumeFromIndex; i < uniqueNumbers.length; i++) {
               await processNumber(uniqueNumbers[i]);
               if ((i + 1) % 5 === 0) {
                 console.log(`  ${i+1}/${uniqueNumbers.length} numbers, ${totalFetched} calls`);
-                // Save progress every 10 numbers so we don't lose everything on timeout
-                if ((i + 1) % 10 === 0) {
-                  const partialRows = Object.values(pivotData);
-                  partialRows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
-                  const ms = new Set(); partialRows.forEach(u => Object.keys(u.months).forEach(m => ms.add(m)));
-                  const partialMonths = Array.from(ms).sort();
-                  const partialTotal = partialRows.reduce((s,u)=>s+u.total,0);
-                  const partialMax = partialRows.length ? Math.max(...partialRows.flatMap(u=>Object.values(u.months))) : 1;
-                  await saveGist({ rows: partialRows, allMonths: partialMonths, totalCalls: partialTotal, globalMax: partialMax, fetchedAt: new Date().toISOString(), generatedAt: 'Refreshing...' });
-                  console.log(`  Checkpoint saved: ${partialTotal.toLocaleString()} calls, ${partialRows.length} users`);
-                }
               }
-              await sleep(200); // 200ms between numbers to avoid rate limiting
+              // Save checkpoint every 10 numbers
+              if ((i + 1) % 10 === 0) {
+                const partialRows = Object.values(pivotData);
+                partialRows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
+                const ms = new Set(); partialRows.forEach(u => Object.keys(u.months).forEach(m => ms.add(m)));
+                const partialMonths = Array.from(ms).sort();
+                const partialTotal = partialRows.reduce((s,u)=>s+u.total,0);
+                const partialMax = partialRows.length ? Math.max(...partialRows.flatMap(u=>Object.values(u.months))) : 1;
+                // Store resume index so next run continues from here if timeout occurs
+                await saveGist({ rows: partialRows, allMonths: partialMonths, totalCalls: partialTotal, globalMax: partialMax, fetchedAt: new Date().toISOString(), generatedAt: 'Refreshing...', _resumeIndex: i + 1 });
+                console.log(`  Checkpoint saved: ${partialTotal.toLocaleString()} calls, ${partialRows.length} users (resume index: ${i+1})`);
+              }
+              await sleep(200);
             }
 
             console.log(`Total new calls fetched: ${totalFetched}`);
