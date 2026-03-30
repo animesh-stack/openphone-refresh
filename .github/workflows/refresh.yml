@@ -3,7 +3,7 @@ name: OpenPhone Hourly Refresh
 on:
   schedule:
     - cron: '*/15 * * * *'  # Every 15 minutes
-  workflow_dispatch:        # Allow manual trigger from GitHub UI
+workflow_dispatch:        # Allow manual trigger - schedule reset 30 Mar
 
 concurrency:
   group: openphone-refresh  # Only one run at a time
