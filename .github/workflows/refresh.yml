@@ -131,7 +131,7 @@ jobs:
             // Smart lookback:
             // - Good data (>=118 users) → incremental from last fetch
             // - Incomplete data → full history, but resume from last checkpoint if available
-            const hasGoodData = existing && existing.rows && existing.rows.length >= 118;
+            const hasGoodData = existing && existing.rows && existing.rows.length >= 110;
             const OVERLAP_MS = 20 * 60 * 1000;
             const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
             const resumeFromIndex = (!hasGoodData && existing && existing._resumeIndex) ? existing._resumeIndex : 0;
