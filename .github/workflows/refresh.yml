@@ -2,7 +2,7 @@ name: OpenPhone Hourly Refresh
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Every 15 minutes
+    - cron: '2,17,32,47 * * * *'  # Every 15 minutes
   workflow_dispatch:        # Allow manual trigger - schedule reset 30 Mar
 
 concurrency:
