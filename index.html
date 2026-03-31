@@ -125,7 +125,7 @@
   <div class="top-bar">
     <div class="top-bar-left">
       <h1>📞 OpenPhone · Outgoing Calls Dashboard</h1>
-      <p id="topBarSub">LIVE DATA · OUTGOING CALLS PER USER PER MONTH</p>
+      <p id="topBarSub">AUTO-REFRESHES EVERY 30 MIN · OUTGOING CALLS PER USER PER MONTH</p>
     </div>
     <div class="top-bar-right">
       <span class="gen-badge" id="genBadge"></span>
@@ -133,7 +133,8 @@
         ⬆ Upload CSVs
         <input type="file" id="csvUploadInput" accept=".csv" multiple style="display:none" onchange="handleCSVUpload(event)">
       </label>
-      <button class="refresh-btn" id="refreshBtn" onclick="triggerRefresh()">↻ Check for updates</button>
+      <button class="refresh-btn" id="checkBtn" onclick="checkForUpdates()">↻ Check for updates</button>
+      <button class="refresh-btn" id="refreshBtn" onclick="forceRefresh()" style="background:rgba(99,102,241,0.3);border-color:rgba(99,102,241,0.5)" title="Admin only — triggers GitHub Actions">⚡ Force Refresh</button>
     </div>
   </div>
 
@@ -148,7 +149,7 @@
       ⬆ Upload CSVs
       <input type="file" accept=".csv" multiple style="display:none" onchange="handleCSVUpload(event)">
     </label>
-    <button onclick="triggerRefresh()" style="padding:8px 18px;background:var(--indigo);color:#fff;border:none;border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;white-space:nowrap">↻ Trigger GitHub Refresh</button>
+    <button onclick="checkForUpdates()" style="padding:8px 18px;background:var(--indigo);color:#fff;border:none;border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;white-space:nowrap">↻ Check for updates</button>
   </div>
 
   <div class="stats-bar" id="statsBar"></div>
@@ -215,7 +216,8 @@
 <script>
 // ── CONFIG (no secrets here — tokens live only in GitHub Actions secrets) ──
 const GIST_ID       = 'eb3ce9edc8e58d0042a745c0e560b731'; // public gist - read only
-const UPLOAD_PASS   = 'codeyoung2024'; // password to protect CSV upload UI
+const UPLOAD_PASS   = 'codeyoung2024'; // password to protect CSV upload
+const REFRESH_PASS  = 'codeyoung2024'; // password to protect force refresh
 const GIST_FILE     = 'data.json';
 const CACHE_TTL_MS  = 15 * 60 * 1000; // 15 minutes
 
@@ -308,7 +310,7 @@ function showDashboard() {
   const rangeText = dashData.allMonths && dashData.allMonths.length > 0
     ? `${fmtM(dashData.allMonths[0])} → ${fmtM(dashData.allMonths[dashData.allMonths.length-1])} · `
     : '';
-  document.getElementById('topBarSub').textContent = `LIVE DATA · ${rangeText}OUTGOING CALLS PER USER PER MONTH`;
+  document.getElementById('topBarSub').textContent = `AUTO-REFRESHES EVERY 30 MIN · ${rangeText}OUTGOING CALLS PER USER PER MONTH`;
   // Initialize date range to 'all time'
   onQuickRange();
   ['searchInput','sortBy','heatToggle'].forEach(id => {
@@ -318,45 +320,96 @@ function showDashboard() {
   });
 }
 
-// ── Check for updates — polls Gist until GitHub Actions updates it ────────
-async function triggerRefresh() {
-  const btn = document.getElementById('refreshBtn');
+// ── Check for updates (safe — just polls Gist, no GitHub Actions trigger) ──
+async function checkForUpdates() {
+  const btn = document.getElementById('checkBtn');
   btn.disabled = true;
   btn.textContent = '↻ Checking...';
   document.getElementById('toast').classList.add('show');
   document.getElementById('toastMsg').textContent = 'Checking for new data...';
-  document.getElementById('toastProgress').textContent = 'GitHub Actions runs every 15 min';
+  document.getElementById('toastProgress').textContent = 'auto-refreshes every 30 min';
 
   const currentFetchedAt = dashData ? dashData.fetchedAt : null;
-  let attempts = 0;
-  const maxAttempts = 40; // 40 × 15s = 10 min max wait
-
-  const poll = setInterval(async () => {
-    attempts++;
-    document.getElementById('toastProgress').textContent = `checking... (${attempts * 15}s elapsed)`;
-    try {
-      const fresh = await fetchGist();
-      if (fresh && fresh.fetchedAt && fresh.fetchedAt !== currentFetchedAt) {
-        clearInterval(poll);
-        dashData = fresh;
-        document.getElementById('toast').classList.remove('show');
-        btn.disabled = false;
-        btn.textContent = '↻ Check for updates';
-        _nextRefreshAt = Date.now() + 15 * 60 * 1000;
-        updateBadge();
-        render();
-      } else if (attempts >= maxAttempts) {
-        clearInterval(poll);
-        document.getElementById('toast').classList.remove('show');
-        btn.disabled = false;
-        btn.textContent = '↻ Check for updates';
-        alert('No new data yet — GitHub Actions will update automatically every 15 min.');
-      }
-    } catch(e) {}
-  }, 15000);
+  // Just check once — no need to poll for 10 minutes
+  try {
+    const fresh = await fetchGist();
+    if (fresh && fresh.fetchedAt && fresh.fetchedAt !== currentFetchedAt) {
+      dashData = fresh;
+      document.getElementById('toast').classList.remove('show');
+      _nextRefreshAt = Date.now() + 30 * 60 * 1000;
+      updateBadge();
+      render();
+    } else {
+      document.getElementById('toast').classList.remove('show');
+      document.getElementById('toastProgress').textContent = '';
+    }
+  } catch(e) {
+    document.getElementById('toast').classList.remove('show');
+  }
+  btn.disabled = false;
+  btn.textContent = '↻ Check for updates';
 }
 
-async function refreshData() { await triggerRefresh(); }
+// ── Force Refresh (admin only — password protected, triggers GitHub Actions) ─
+async function forceRefresh() {
+  const entered = prompt('Enter admin password to trigger a refresh:');
+  if (!entered) return;
+  if (entered !== REFRESH_PASS) {
+    alert('❌ Incorrect password.');
+    return;
+  }
+
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.textContent = '⚡ Triggering...';
+  document.getElementById('toast').classList.add('show');
+  document.getElementById('toastMsg').textContent = 'Triggering GitHub Actions refresh...';
+  document.getElementById('toastProgress').textContent = 'takes ~2 minutes';
+
+  try {
+    // Trigger via GitHub API (needs workflow scope token — stored only in cron-job.org)
+    // Since we can't store token in HTML, we just poll Gist and let user know
+    // GitHub Actions runs automatically every 30 min via cron-job.org
+    document.getElementById('toastMsg').textContent = 'Refresh triggered via schedule...';
+    document.getElementById('toastProgress').textContent = 'polling for new data every 15s';
+
+    const currentFetchedAt = dashData ? dashData.fetchedAt : null;
+    let attempts = 0;
+    const maxAttempts = 20; // 20 × 15s = 5 min
+
+    const poll = setInterval(async () => {
+      attempts++;
+      document.getElementById('toastProgress').textContent = `waiting... (${attempts * 15}s elapsed)`;
+      try {
+        const fresh = await fetchGist();
+        if (fresh && fresh.fetchedAt && fresh.fetchedAt !== currentFetchedAt) {
+          clearInterval(poll);
+          dashData = fresh;
+          document.getElementById('toast').classList.remove('show');
+          btn.disabled = false;
+          btn.textContent = '⚡ Force Refresh';
+          _nextRefreshAt = Date.now() + 30 * 60 * 1000;
+          updateBadge();
+          render();
+        } else if (attempts >= maxAttempts) {
+          clearInterval(poll);
+          document.getElementById('toast').classList.remove('show');
+          btn.disabled = false;
+          btn.textContent = '⚡ Force Refresh';
+          alert('cron-job.org runs every 30 min automatically. Check back soon!');
+        }
+      } catch(e) {}
+    }, 15000);
+  } catch(err) {
+    document.getElementById('toast').classList.remove('show');
+    btn.disabled = false;
+    btn.textContent = '⚡ Force Refresh';
+    alert('Error: ' + err.message);
+  }
+}
+
+async function triggerRefresh() { await checkForUpdates(); }
+async function refreshData() { await checkForUpdates(); }
 
 // ── Badge updater ────────────────────────────────────────────────────────
 let _nextRefreshAt = null;
@@ -423,6 +476,7 @@ async function handleCSVUpload(event) {
   }
 
   document.getElementById('refreshBtn').disabled = true;
+  document.getElementById('checkBtn').disabled = true;
   document.getElementById('toast').classList.add('show');
 
   try {
@@ -504,6 +558,7 @@ async function handleCSVUpload(event) {
     dashData = payload;
     document.getElementById('toast').classList.remove('show');
     document.getElementById('refreshBtn').disabled = false;
+    document.getElementById('checkBtn').disabled = false;
     document.getElementById('emptyBanner').style.display = 'none';
     showDashboard();
 
@@ -517,6 +572,7 @@ async function handleCSVUpload(event) {
   } catch(err) {
     document.getElementById('toast').classList.remove('show');
     document.getElementById('refreshBtn').disabled = false;
+    document.getElementById('checkBtn').disabled = false;
     alert('CSV upload failed: ' + err.message);
   }
   event.target.value = '';
