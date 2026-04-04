@@ -91,6 +91,23 @@
   tbody tr:hover td.totc { background: #e0e7ff; }
   .no-results { text-align: center; padding: 48px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; }
 
+  /* Inactive alerts */
+  .inactive-section { margin: 12px 20px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; overflow: hidden; }
+  .inactive-header { padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+  .inactive-header-left { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; font-weight: 700; color: #c2410c; }
+  .inactive-header-right { font-size: 0.7rem; color: #9a3412; font-family: 'IBM Plex Mono', monospace; }
+  .inactive-chips { padding: 0 16px 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .inactive-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; background: #ffedd5; border: 1px solid #fdba74; border-radius: 20px; font-size: 0.7rem; font-family: 'IBM Plex Sans', sans-serif; color: #9a3412; cursor: pointer; transition: background 0.15s; }
+  .inactive-chip:hover { background: #fed7aa; }
+  .inactive-chip .chip-team { font-size: 0.6rem; font-weight: 700; padding: 1px 5px; border-radius: 8px; margin-left: 2px; }
+  tbody tr.inactive-row td { background: #fff7ed !important; }
+  tbody tr.inactive-row:hover td { background: #ffedd5 !important; }
+  tbody tr.inactive-row td.ec { background: #fff7ed !important; }
+  tbody tr.inactive-row:hover td.ec { background: #ffedd5 !important; }
+  tbody tr.inactive-row td.totc { background: #ffedd5 !important; border-left-color: #f97316; }
+  tbody tr.inactive-row:hover td.totc { background: #fed7aa !important; }
+  .inactive-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; background: #fed7aa; color: #9a3412; border-radius: 8px; font-size: 0.6rem; font-weight: 700; font-family: 'IBM Plex Mono', monospace; margin-left: 5px; }
+
   /* Team colors */
   .team-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; flex-shrink: 0; }
   .team-badge { display: inline-flex; align-items: center; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; cursor: pointer; }
@@ -184,6 +201,18 @@
   </div>
 
   <div class="stats-bar" id="statsBar"></div>
+
+  <!-- Inactive Users Alert Section -->
+  <div id="inactiveSection" class="inactive-section" style="display:none">
+    <div class="inactive-header" onclick="toggleInactiveSection()">
+      <div class="inactive-header-left">
+        <span>⚠️</span>
+        <span id="inactiveTitle">0 users inactive in last 7 days</span>
+      </div>
+      <div class="inactive-header-right" id="inactiveToggleHint">▼ click to expand</div>
+    </div>
+    <div id="inactiveChips" class="inactive-chips" style="display:none"></div>
+  </div>
 
   <div class="controls">
     <div class="ctrl"><label>Search</label><input type="text" id="searchInput" placeholder="Name or email..."></div>
@@ -353,6 +382,70 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 
 // OpenPhone API calls handled by GitHub Actions only — not from browser
+
+// ── Inactive User Alerts ─────────────────────────────────────────────────
+const INACTIVE_DAYS = 7; // threshold
+
+function getInactiveUsers(rows) {
+  const today = new Date();
+  const inactive = [];
+  for (const u of rows) {
+    if (!u.days || Object.keys(u.days).length === 0) continue; // skip users with no daily data
+    let hasCall = false;
+    for (let i = 0; i < INACTIVE_DAYS; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dk = d.getFullYear() + '-' +
+        String(d.getMonth()+1).padStart(2,'0') + '-' +
+        String(d.getDate()).padStart(2,'0');
+      if ((u.days[dk] || 0) > 0) { hasCall = true; break; }
+    }
+    if (!hasCall) inactive.push(u);
+  }
+  return inactive;
+}
+
+function isUserInactive(u) {
+  const today = new Date();
+  if (!u.days || Object.keys(u.days).length === 0) return false;
+  for (let i = 0; i < INACTIVE_DAYS; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dk = d.getFullYear() + '-' +
+      String(d.getMonth()+1).padStart(2,'0') + '-' +
+      String(d.getDate()).padStart(2,'0');
+    if ((u.days[dk] || 0) > 0) return false;
+  }
+  return true;
+}
+
+let _inactiveSectionOpen = false;
+function toggleInactiveSection() {
+  _inactiveSectionOpen = !_inactiveSectionOpen;
+  document.getElementById('inactiveChips').style.display = _inactiveSectionOpen ? 'flex' : 'none';
+  document.getElementById('inactiveToggleHint').textContent = _inactiveSectionOpen ? '▲ click to collapse' : '▼ click to expand';
+}
+
+function updateInactiveSection(rows) {
+  const inactive = getInactiveUsers(rows);
+  const section = document.getElementById('inactiveSection');
+  if (inactive.length === 0) { section.style.display = 'none'; return; }
+
+  section.style.display = 'block';
+  document.getElementById('inactiveTitle').textContent =
+    `${inactive.length} user${inactive.length > 1 ? 's' : ''} with no calls in last ${INACTIVE_DAYS} days`;
+
+  // Build chips
+  const chips = inactive.map(u => {
+    const team = getTeam(u.email);
+    const c = TEAM_COLORS[team] || TEAM_COLORS['Unassigned'];
+    return `<span class="inactive-chip" onclick="document.getElementById('searchInput').value='${u.firstName}';render()">
+      ${u.firstName} ${u.lastName}
+      <span class="chip-team" style="background:${c.bg};color:${c.text}">${team}</span>
+    </span>`;
+  }).join('');
+  document.getElementById('inactiveChips').innerHTML = chips;
+}
 
 // ── Teams Gist ────────────────────────────────────────────────────────────
 let teamsData = { teams: {}, teamNames: [...TEAM_NAMES] };
@@ -967,14 +1060,19 @@ function render() {
     return;
   }
 
+  // Update inactive section with ALL rows (not filtered) so alert is always accurate
+  updateInactiveSection(dashData.rows);
+
   document.getElementById('tBody').innerHTML = data.map(u => {
+    const inactive = isUserInactive(u);
     const cells = cols.map(k => {
       const c = getVal(u, k);
       const s = doHeat ? heat(c, viewMax) : '';
       return `<td class="cc" style="${s}" title="${fmtCol(k)}: ${c}">${c||''}</td>`;
     }).join('');
-    return `<tr>
-      <td class="ec">${u.email}</td><td class="fnc">${u.firstName}</td>
+    const inactiveBadge = inactive ? `<span class="inactive-badge" title="No calls in last ${INACTIVE_DAYS} days">⚠ inactive</span>` : '';
+    return `<tr class="${inactive ? 'inactive-row' : ''}">
+      <td class="ec">${u.email}${inactiveBadge}</td><td class="fnc">${u.firstName}</td>
       <td class="lnc">${u.lastName}</td>
       <td class="teamc">${teamBadgeHTML(u.email)}</td>
       <td class="nc">${u.number}</td>
