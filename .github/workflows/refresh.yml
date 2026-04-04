@@ -162,12 +162,22 @@ jobs:
             console.log(`${phoneNumbers.length} phone numbers, ${Object.keys(numById).length} mapped`);
 
             // Update existing user info with fresh data from API
-            // (catches name changes, number reassignments, etc.)
+            // Track number changes with timestamp
+            const today = new Date().toISOString().slice(0, 10);
             Object.values(numById).forEach(u => {
               if (pivotData[u.email]) {
-                pivotData[u.email].firstName = u.firstName;
-                pivotData[u.email].lastName  = u.lastName;
-                pivotData[u.email].number    = u.number;
+                const existing = pivotData[u.email];
+                // Detect number change
+                const oldNum = String(existing.number || '').replace(/[^0-9]/g, '');
+                const newNum = String(u.number || '').replace(/[^0-9]/g, '');
+                if (oldNum && newNum && oldNum !== newNum) {
+                  console.log(`  Number change detected for ${u.email}: ${oldNum} → ${newNum}`);
+                  existing.previousNumber  = oldNum;
+                  existing.numberChangedAt = today;
+                }
+                existing.firstName = u.firstName;
+                existing.lastName  = u.lastName;
+                existing.number    = newNum;
               }
             });
             console.log('Updated user info from API');
