@@ -282,7 +282,7 @@ const REFRESH_PASS  = 'codeyoung2024'; // password to protect force refresh
 const TEAMS_PASS    = 'codeyoung2024'; // password to protect team editing
 const GIST_FILE     = 'data.json';
 const TEAMS_FILE    = 'teams.json';
-const CACHE_TTL_MS  = 15 * 60 * 1000; // 15 minutes
+const CACHE_TTL_MS  = 30 * 60 * 1000; // 30 minutes — matches cron-job.org schedule
 
 // Team config
 const TEAM_NAMES  = ['OLG', 'Akash', 'Rishabh', 'Sumalika', 'Pratyush', 'Anisa', 'Admin'];
@@ -315,7 +315,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       // Also fetch teams
       await fetchTeamsGist();
       setProgress(100);
-      showDashboard();
+      showDashboard(); // populateTeamFilter called inside showDashboard
 
       // Check if data is stale (> 1 hour) — if so, refresh silently in background
       const age = cached.fetchedAt ? Date.now() - new Date(cached.fetchedAt).getTime() : Infinity;
@@ -323,17 +323,10 @@ window.addEventListener('DOMContentLoaded', async () => {
         ? 2000  // stale: start immediately (after 2s)
         : Math.max(5000, 15 * 60 * 1000 - age); // fresh: wait remaining time
 
-      _nextRefreshAt = Date.now() + msUntilNextRefresh;
+      // Auto-refresh is handled by cron-job.org → GitHub Actions every 30 min
+      // Browser just shows countdown based on last fetchedAt
+      _nextRefreshAt = new Date(cached.fetchedAt).getTime() + 30 * 60 * 1000;
       updateBadge();
-
-      setTimeout(() => {
-        silentRefresh();
-        // After first refresh, repeat every hour
-        setInterval(() => {
-          _nextRefreshAt = Date.now() + 15 * 60 * 1000;
-          silentRefresh();
-        }, 15 * 60 * 1000);
-      }, msUntilNextRefresh);
       return;
     }
 
@@ -499,10 +492,15 @@ async function saveTeams() {
 function populateTeamFilter() {
   const sel = document.getElementById('teamFilter');
   const current = sel.value;
+  // Use actual team names from loaded teamsData (falls back to TEAM_NAMES)
+  const names = (teamsData && teamsData.teamNames && teamsData.teamNames.length)
+    ? teamsData.teamNames : TEAM_NAMES;
   sel.innerHTML = '<option value="all">All Teams</option>' +
-    TEAM_NAMES.map(t => `<option value="${t}">${t}</option>`).join('') +
+    names.map(t => `<option value="${t}">${t}</option>`).join('') +
     '<option value="Unassigned">Unassigned</option>';
-  sel.value = current;
+  // Restore previous selection if still valid
+  if ([...sel.options].some(o => o.value === current)) sel.value = current;
+  else sel.value = 'all';
 }
 
 // ── GitHub Gist ───────────────────────────────────────────────────────────
@@ -644,14 +642,14 @@ async function refreshData() { await checkForUpdates(); }
 let _nextRefreshAt = null;
 
 function updateBadge() {
-  if (_refreshing) {
-    document.getElementById('genBadge').textContent = '↻ Refreshing...';
-    return;
-  }
   if (!dashData || !dashData.generatedAt) return;
   const badge = document.getElementById('genBadge');
   if (_nextRefreshAt) {
     const secsLeft = Math.max(0, Math.round((_nextRefreshAt - Date.now()) / 1000));
+    if (secsLeft <= 0) {
+      badge.textContent = `Updated ${dashData.generatedAt} · refresh due`;
+      return;
+    }
     const mins = Math.floor(secsLeft / 60);
     const secs = secsLeft % 60;
     const timeStr = mins > 0 ? `${mins}m` : `${secs}s`;
@@ -962,7 +960,7 @@ function render() {
   document.getElementById('rowCount').textContent = `${data.length} users`;
 
   document.getElementById('tHead').innerHTML = `<tr>
-    <th>Email</th><th>First</th><th>Last</th><th class="teamc">Team</th><th>Number</th>
+    <th>Email</th><th>First</th><th>Last</th><th class="teamc">Team</th><th>Number</th><th style="min-width:120px">Num Changed</th>
     ${cols.map(k => `<th class="mc">${fmtCol(k)}</th>`).join('')}
     <th class="tc">TOTAL</th>
   </tr>`;
@@ -982,7 +980,12 @@ function render() {
       <td class="ec">${u.email}</td><td class="fnc">${u.firstName}</td>
       <td class="lnc">${u.lastName}</td>
       <td class="teamc">${teamBadgeHTML(u.email)}</td>
-      <td class="nc">${u.number}${u.previousNumber ? `<span title="Changed from ${u.previousNumber} on ${u.numberChangedAt || 'unknown'}" style="margin-left:5px;cursor:help;font-size:0.65rem;background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:3px;font-family:'IBM Plex Mono',monospace">🔄</span>` : ''}</td>
+      <td class="nc">${u.number}</td>
+      <td class="nc" style="font-size:0.65rem;color:${u.previousNumber ? '#92400e' : 'var(--muted)'};min-width:140px">
+        ${u.previousNumber
+          ? `<span title="Previously: ${u.previousNumber}" style="cursor:help">🔄 ${u.numberChangedAt || '—'}</span>`
+          : '<span style="color:var(--muted)">—</span>'}
+      </td>
       ${cells}<td class="totc">${u._viewTotal.toLocaleString()}</td>
     </tr>`;
   }).join('');
