@@ -360,26 +360,31 @@ let pendingTeams = null; // unsaved changes in modal
 
 async function fetchTeamsGist() {
   try {
-    if (TEAMS_BIN_ID === '69d0f9bfaaba882197c3c8a7') return; // not set up yet
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${TEAMS_BIN_ID}/latest`, {
-      headers: { 'X-Access-Key': '$2a$10$placeholder' } // public bin needs no key
-    });
+    // JSONBin public bin — no API key needed for public bins
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${TEAMS_BIN_ID}/latest`);
     if (!res.ok) return;
     const json = await res.json();
     const parsed = json.record;
     if (!parsed) return;
     teamsData = { teams: parsed.teams || {}, teamNames: parsed.teamNames || [...TEAM_NAMES] };
+    console.log('Teams loaded:', Object.keys(teamsData.teams).length, 'assignments');
   } catch(e) { console.log('Teams fetch failed:', e.message); }
 }
 
 async function saveTeamsGist(data) {
-  // JSONBin public bin — no token needed, anyone can update
+  // JSONBin public bin — PUT to update, no API key needed for public bins
   const res = await fetch(`https://api.jsonbin.io/v3/b/${TEAMS_BIN_ID}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Bin-Private': 'false'  // ensure it stays public
+    },
     body: JSON.stringify(data)
   });
-  if (!res.ok) throw new Error(`Teams save failed: ${res.status}`);
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Teams save failed: ${res.status} - ${t}`);
+  }
 }
 
 function getTeam(email) {
@@ -977,7 +982,7 @@ function render() {
       <td class="ec">${u.email}</td><td class="fnc">${u.firstName}</td>
       <td class="lnc">${u.lastName}</td>
       <td class="teamc">${teamBadgeHTML(u.email)}</td>
-      <td class="nc">${u.number}</td>
+      <td class="nc">${u.number}${u.previousNumber ? `<span title="Changed from ${u.previousNumber} on ${u.numberChangedAt || 'unknown'}" style="margin-left:5px;cursor:help;font-size:0.65rem;background:#fef3c7;color:#92400e;padding:1px 5px;border-radius:3px;font-family:'IBM Plex Mono',monospace">🔄</span>` : ''}</td>
       ${cells}<td class="totc">${u._viewTotal.toLocaleString()}</td>
     </tr>`;
   }).join('');
