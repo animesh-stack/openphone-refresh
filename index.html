@@ -225,6 +225,13 @@
       <label>Team</label>
       <select id="teamFilter">
         <option value="all">All Teams</option>
+        <option value="OLG">OLG</option>
+        <option value="Akash">Akash</option>
+        <option value="Rishabh">Rishabh</option>
+        <option value="Sumalika">Sumalika</option>
+        <option value="Pratyush">Pratyush</option>
+        <option value="Anisa">Anisa</option>
+        <option value="Admin">Admin</option>
         <option value="Unassigned">Unassigned</option>
       </select>
     </div>
@@ -490,17 +497,7 @@ async function saveTeams() {
 }
 
 function populateTeamFilter() {
-  const sel = document.getElementById('teamFilter');
-  const current = sel.value;
-  // Use actual team names from loaded teamsData (falls back to TEAM_NAMES)
-  const names = (teamsData && teamsData.teamNames && teamsData.teamNames.length)
-    ? teamsData.teamNames : TEAM_NAMES;
-  sel.innerHTML = '<option value="all">All Teams</option>' +
-    names.map(t => `<option value="${t}">${t}</option>`).join('') +
-    '<option value="Unassigned">Unassigned</option>';
-  // Restore previous selection if still valid
-  if ([...sel.options].some(o => o.value === current)) sel.value = current;
-  else sel.value = 'all';
+  // Dropdown is hardcoded in HTML — nothing to do
 }
 
 // ── GitHub Gist ───────────────────────────────────────────────────────────
