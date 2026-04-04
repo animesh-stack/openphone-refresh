@@ -537,7 +537,7 @@ function showDashboard() {
   document.getElementById('topBarSub').textContent = `AUTO-REFRESHES EVERY 30 MIN · ${rangeText}OUTGOING CALLS PER USER PER MONTH`;
   // Initialize date range to 'all time'
   onQuickRange();
-  ['searchInput','sortBy','heatToggle'].forEach(id => {
+  ['searchInput','sortBy','heatToggle','teamFilter','monthRange'].forEach(id => {
     const el = document.getElementById(id);
     el.addEventListener('change', render);
     if (id === 'searchInput') el.addEventListener('input', render);
