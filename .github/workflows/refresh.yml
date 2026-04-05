@@ -1,16 +1,16 @@
 name: OpenPhone Hourly Refresh
 
 on:
-  workflow_dispatch:        # Triggered by cron-job.org every 30 min
+  workflow_dispatch:        # Triggered by cron-job.org every 30 minutes
 
 concurrency:
-  group: openphone-refresh  # Only one run at a time
-  cancel-in-progress: true  # Cancel old run if new one starts
+  group: openphone-refresh
+  cancel-in-progress: true
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 90     # Kill if takes longer than 90 min
+    timeout-minutes: 90
 
     steps:
       - name: Fetch from OpenPhone API and update Gist
@@ -27,7 +27,8 @@ jobs:
           const GIST_ID  = process.env.GIST_ID;
           const OP_BASE  = 'https://api.openphone.com/v1';
 
-          // ── Helpers ──────────────────────────────────────────────────────
+          function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
           function request(url, opts = {}) {
             return new Promise((resolve, reject) => {
               const req = https.request(url, opts, res => {
@@ -38,51 +39,26 @@ jobs:
                   catch(e) { resolve({ status: res.statusCode, body: data }); }
                 });
               });
-              // 30 second timeout per request — prevents hanging forever
-              req.setTimeout(30000, () => {
-                req.destroy(new Error('Request timeout after 30s'));
-              });
+              req.setTimeout(30000, () => { req.destroy(new Error('Request timeout')); });
               req.on('error', reject);
               if (opts.body) req.write(opts.body);
               req.end();
             });
           }
 
-          async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
           async function opGet(path, retries = 4) {
             for (let attempt = 0; attempt <= retries; attempt++) {
               try {
-                const r = await request(`${OP_BASE}${path}`, {
-                  headers: { 'Authorization': OP_KEY }
-                });
+                const r = await request(`${OP_BASE}${path}`, { headers: { 'Authorization': OP_KEY } });
                 if (r.status === 404) return { data: [], nextPageToken: null };
-                if (r.status === 429) { // rate limited
-                  await sleep(5000 * (attempt + 1));
-                  continue;
-                }
-                if (r.status !== 200) throw new Error(`OpenPhone API ${r.status}: ${JSON.stringify(r.body)}`);
+                if (r.status === 429) { await sleep(5000 * (attempt + 1)); continue; }
+                if (r.status !== 200) throw new Error(`OpenPhone API ${r.status}`);
                 return r.body;
               } catch(e) {
                 if (attempt === retries) throw e;
-                const wait = 3000 * (attempt + 1);
-                console.log(`  Retry ${attempt + 1}/${retries} after ${wait}ms: ${e.message.slice(0,60)}`);
-                await sleep(wait);
+                await sleep(3000 * (attempt + 1));
               }
             }
-          }
-
-          async function opGetAll(path) {
-            const results = [];
-            let nextPage = null;
-            do {
-              const sep = path.includes('?') ? '&' : '?';
-              const url = nextPage ? `${path}${sep}maxResults=50&pageToken=${nextPage}` : `${path}?maxResults=50`;
-              const res = await opGet(url);
-              results.push(...(res.data || []));
-              nextPage = res.nextPageToken || null;
-            } while (nextPage);
-            return results;
           }
 
           async function fetchGist() {
@@ -100,10 +76,8 @@ jobs:
             const r = await request(`https://api.github.com/gists/${GIST_ID}`, {
               method: 'PATCH',
               headers: {
-                'Authorization': `token ${GH_TOKEN}`,
-                'User-Agent': 'openphone-refresh',
-                'Accept': 'application/vnd.github.v3+json',
-                'Content-Type': 'application/json',
+                'Authorization': `token ${GH_TOKEN}`, 'User-Agent': 'openphone-refresh',
+                'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(body)
               },
               body
@@ -114,11 +88,9 @@ jobs:
 
           function normNum(n) { return String(n).replace(/[^0-9]/g, ''); }
 
-          // ── Main ─────────────────────────────────────────────────────────
           async function main() {
             console.log('Starting OpenPhone refresh...');
 
-            // Load existing data
             const existing = await fetchGist();
             const pivotData = {};
 
@@ -129,185 +101,141 @@ jobs:
               console.log(`Loaded ${existing.rows.length} users from Gist`);
             }
 
-            // Determine fetch window — only since last refresh
-            // Smart lookback:
-            // - Good data (>=118 users) → incremental from last fetch
-            // - Incomplete data → full history, but resume from last checkpoint if available
-            // Good data = 100+ active users OR had good data before but Gist got corrupted
-            const activeCount = existing && existing.rows ? existing.rows.length : 0;
-            const archivedCount = existing && existing.archivedUsers ? existing.archivedUsers.length : 0;
-            const hasGoodData = activeCount >= 100 || (activeCount + archivedCount) >= 100;
+            // Smart lookback — incremental if good data, full history if not
+            const hasGoodData = existing && existing.rows && existing.rows.length >= 100;
             const OVERLAP_MS = 20 * 60 * 1000;
             const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
-            // Resume from checkpoint only during full history fetch
             const resumeFromIndex = (!hasGoodData && existing && existing._resumeIndex) ? existing._resumeIndex : 0;
-            if (hasGoodData && existing && existing._resumeIndex) {
-              console.log('Clearing stale resume index — switching to incremental mode');
-            }
             const lookbackDate = hasGoodData && lastFetch
               ? new Date(lastFetch.getTime() - OVERLAP_MS)
               : new Date('2024-06-01T00:00:00Z');
             const createdAfter = lookbackDate.toISOString();
             if (hasGoodData) console.log(`Incremental fetch since ${createdAfter}`);
             else console.log(`Full history fetch — ${resumeFromIndex > 0 ? 'resuming from number ' + resumeFromIndex : 'starting fresh'}`);
-            console.log(`Fetching calls since: ${createdAfter}`);
 
-            // Fetch users and phone numbers
-            const users = await opGetAll('/users');
+            // Fetch users
+            const users = await opGet('/users?maxResults=50');
             const userById = {};
-            users.forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
-            console.log(`${users.length} users`);
+            (users.data || []).forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
+            console.log(`${Object.keys(userById).length} users`);
 
-            const phoneNumbers = await opGetAll('/phone-numbers');
+            // Fetch phone numbers
+            let allPhoneNumbers = [];
+            let pnPage = null;
+            do {
+              const p = new URLSearchParams({ maxResults: 50 });
+              if (pnPage) p.set('pageToken', pnPage);
+              const r = await opGet(`/phone-numbers?${p}`);
+              allPhoneNumbers.push(...(r.data || []));
+              pnPage = r.nextPageToken || null;
+            } while (pnPage);
+
             const numById = {};
-            phoneNumbers.forEach(pn => {
+            allPhoneNumbers.forEach(pn => {
               (pn.users || []).forEach(pu => {
                 const user = userById[pu.id];
                 if (user && !numById[pn.id]) {
-                  numById[pn.id] = { ...user, number: normNum(pn.number), userId: pu.id };
+                  numById[pn.id] = { ...user, number: normNum(pn.number) };
                 }
               });
             });
-            console.log(`${phoneNumbers.length} phone numbers, ${Object.keys(numById).length} mapped`);
+            console.log(`${allPhoneNumbers.length} phone numbers, ${Object.keys(numById).length} mapped`);
 
-            // Update existing user info with fresh data from API
-            // Track number changes with timestamp
-            const today = new Date().toISOString().slice(0, 10);
-
-            // Build set of active emails from API
+            // Remove deleted users
             const activeEmails = new Set(Object.values(numById).map(u => u.email));
-
-            // Load existing archived users (preserve across runs)
-            const archivedMap = {};
-            if (existing && existing.archivedUsers) {
-              existing.archivedUsers.forEach(u => { archivedMap[u.email] = u; });
-            }
-
-            // Move deleted users to archive instead of deleting
-            const nowArchived = [];
+            const today = new Date().toISOString().slice(0, 10);
             Object.keys(pivotData).forEach(email => {
               if (!activeEmails.has(email)) {
-                const u = pivotData[email];
-                if (!archivedMap[email]) {
-                  // First time archiving this user
-                  archivedMap[email] = { ...u, archivedAt: today };
-                  nowArchived.push(email);
-                }
+                console.log(`  Removing deleted user: ${email}`);
                 delete pivotData[email];
               }
             });
-            if (nowArchived.length > 0) {
-              console.log(`Archived ${nowArchived.length} removed user(s): ${nowArchived.join(', ')}`);
-            }
 
-            // Update info and track number changes for active users
+            // Update user info + track number changes
             Object.values(numById).forEach(u => {
               if (pivotData[u.email]) {
-                const existing = pivotData[u.email];
-                const oldNum = String(existing.number || '').replace(/[^0-9]/g, '');
-                const newNum = String(u.number || '').replace(/[^0-9]/g, '');
-                if (oldNum && newNum && oldNum !== newNum) {
-                  // Only log if not already recorded today (avoid re-detecting on every run)
-                  const alreadyRecorded = existing.numberChangedAt === today;
-                  if (!alreadyRecorded) {
-                    console.log(`  Number change: ${u.email}: ${oldNum} → ${newNum}`);
-                    existing.previousNumber  = oldNum;
-                    existing.numberChangedAt = today;
-                  }
+                const ex = pivotData[u.email];
+                const oldNum = normNum(ex.number || '');
+                const newNum = normNum(u.number || '');
+                if (oldNum && newNum && oldNum !== newNum && ex.numberChangedAt !== today) {
+                  ex.previousNumber = oldNum;
+                  ex.numberChangedAt = today;
+                  console.log(`  Number change: ${u.email}: ${oldNum} → ${newNum}`);
                 }
-                existing.firstName = u.firstName;
-                existing.lastName  = u.lastName;
-                existing.number    = newNum;
+                ex.firstName = u.firstName;
+                ex.lastName  = u.lastName;
+                ex.number    = newNum;
               }
             });
             console.log('Updated user info from API');
 
-            // Fetch calls — parallel batches of 5 numbers at a time
+            // Process calls
+            let totalFetched = 0;
             const seen = new Set();
-            const uniqueNumbers = phoneNumbers.filter(pn => {
+            const uniqueNumbers = allPhoneNumbers.filter(pn => {
               if (seen.has(pn.id) || !numById[pn.id]) return false;
               seen.add(pn.id); return true;
             });
 
-            let totalFetched = 0;
-
-            async function processNumber(pn) {
-              const user = numById[pn.id];
-              // Get conversations for this number
-              let convPage = null;
-              const participantNums = new Set();
-              do {
-                const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50 });
-                if (createdAfter > '2024-06-02') p.set('updatedAfter', createdAfter);
-                if (convPage) p.set('pageToken', convPage);
-                const r = await opGet(`/conversations?${p}`);
-                (r.data || []).forEach(c => (c.participants || []).forEach(pt => participantNums.add(pt)));
-                convPage = r.nextPageToken || null;
-              } while (convPage);
-
-              // Fetch calls per participant in parallel batches of 3
-              const parts = Array.from(participantNums);
-              for (let pi = 0; pi < parts.length; pi += 3) {
-                const pbatch = parts.slice(pi, pi + 3);
-                await Promise.all(pbatch.map(async participant => {
-                let callPage = null;
-                do {
-                  const p = new URLSearchParams({
-                    phoneNumberId: pn.id, participants: participant,
-                    maxResults: 100, createdAfter
-                  });
-                  if (callPage) p.set('pageToken', callPage);
-                  const r = await opGet(`/calls?${p}`);
-                  const calls = r.data || [];
-                  callPage = r.nextPageToken || null;
-                  calls.forEach(call => {
-                    if (call.direction !== 'outgoing') return;
-                    const date = new Date(call.createdAt);
-                    if (isNaN(date)) return;
-                    const mk = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
-                    const dk = `${mk}-${String(date.getDate()).padStart(2,'0')}`;
-                    if (!pivotData[user.email]) pivotData[user.email] = { ...user, months: {}, days: {} };
-                    if (!pivotData[user.email].days) pivotData[user.email].days = {};
-                    pivotData[user.email].months[mk] = (pivotData[user.email].months[mk] || 0) + 1;
-                    pivotData[user.email].days[dk]   = (pivotData[user.email].days[dk]   || 0) + 1;
-                    totalFetched++;
-                  });
-                } while (callPage);
-                }));
-              }
-            }
-
-            // Process sequentially — skip already-processed numbers if resuming
             for (let i = resumeFromIndex; i < uniqueNumbers.length; i++) {
-              // 3 min timeout per number — skip if hanging
-              await Promise.race([
-                processNumber(uniqueNumbers[i]),
-                new Promise(res => setTimeout(() => {
-                  console.log(`  TIMEOUT: skipping number ${i+1} after 3 min`);
-                  res();
-                }, 3 * 60 * 1000))
-              ]);
-              if ((i + 1) % 5 === 0) {
-                console.log(`  ${i+1}/${uniqueNumbers.length} numbers, ${totalFetched} calls`);
+              const pn = uniqueNumbers[i];
+              const user = numById[pn.id];
+
+              try {
+                let convPage = null;
+                const participantNums = new Set();
+                do {
+                  const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50 });
+                  if (createdAfter > '2024-06-02') p.set('updatedAfter', createdAfter);
+                  if (convPage) p.set('pageToken', convPage);
+                  const r = await opGet(`/conversations?${p}`);
+                  (r.data || []).forEach(c => (c.participants||[]).forEach(pt => participantNums.add(pt)));
+                  convPage = r.nextPageToken || null;
+                } while (convPage);
+
+                for (const participant of Array.from(participantNums)) {
+                  let callPage = null;
+                  do {
+                    const p = new URLSearchParams({ phoneNumberId: pn.id, participants: participant, maxResults: 100, createdAfter });
+                    if (callPage) p.set('pageToken', callPage);
+                    const r = await opGet(`/calls?${p}`);
+                    callPage = r.nextPageToken || null;
+                    (r.data || []).forEach(call => {
+                      if (call.direction !== 'outgoing') return;
+                      const date = new Date(call.createdAt);
+                      if (isNaN(date)) return;
+                      const mk = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+                      const dk = `${mk}-${String(date.getDate()).padStart(2,'0')}`;
+                      if (!pivotData[user.email]) pivotData[user.email] = { ...user, months: {}, days: {} };
+                      if (!pivotData[user.email].days) pivotData[user.email].days = {};
+                      pivotData[user.email].months[mk] = (pivotData[user.email].months[mk] || 0) + 1;
+                      pivotData[user.email].days[dk]   = (pivotData[user.email].days[dk]   || 0) + 1;
+                      totalFetched++;
+                    });
+                  } while (callPage);
+                }
+              } catch(e) {
+                console.log(`  Error on number ${i+1} (${user.email}): ${e.message} — skipping`);
               }
-              // Save checkpoint every 10 numbers
-              if ((i + 1) % 10 === 0) {
-                const partialRows = Object.values(pivotData);
-                partialRows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
-                const ms = new Set(); partialRows.forEach(u => Object.keys(u.months).forEach(m => ms.add(m)));
-                const partialMonths = Array.from(ms).sort();
-                const partialTotal = partialRows.reduce((s,u)=>s+u.total,0);
-                const partialMax = partialRows.length ? Math.max(...partialRows.flatMap(u=>Object.values(u.months))) : 1;
-                // Store resume index so next run continues from here if timeout occurs
-                await saveGist({ rows: partialRows, allMonths: partialMonths, totalCalls: partialTotal, globalMax: partialMax, fetchedAt: new Date().toISOString(), generatedAt: 'Refreshing...', _resumeIndex: i + 1, archivedUsers: Object.values(archivedMap) });
-                console.log(`  Checkpoint saved: ${partialTotal.toLocaleString()} calls, ${partialRows.length} users (resume index: ${i+1})`);
+
+              if ((i+1) % 5 === 0) console.log(`  ${i+1}/${uniqueNumbers.length} numbers, ${totalFetched} calls`);
+
+              // Checkpoint every 10 numbers
+              if ((i+1) % 10 === 0) {
+                const pr = Object.values(pivotData);
+                pr.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
+                const ms = new Set(); pr.forEach(u => Object.keys(u.months).forEach(m => ms.add(m)));
+                const pt = pr.reduce((s,u)=>s+u.total,0);
+                const pm = pr.length ? Math.max(...pr.flatMap(u=>Object.values(u.months))) : 1;
+                await saveGist({ rows: pr, allMonths: Array.from(ms).sort(), totalCalls: pt, globalMax: pm, fetchedAt: new Date().toISOString(), generatedAt: 'Refreshing...', _resumeIndex: i+1 });
+                console.log(`  Checkpoint saved: ${pt.toLocaleString()} calls, ${pr.length} users (resume index: ${i+1})`);
               }
+
               await sleep(200);
             }
 
             console.log(`Total new calls fetched: ${totalFetched}`);
 
-            // Build and save payload
             const rows = Object.values(pivotData);
             rows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
             const monthSet = new Set();
@@ -318,12 +246,11 @@ jobs:
             const fetchedAt = new Date().toISOString();
             const ist = new Date(new Date().toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
             const pad = n => String(n).padStart(2,'0');
-            const generatedAt = ist.getDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][ist.getMonth()] + ' ' + ist.getFullYear() + ', ' + pad(ist.getHours()) + ':' + pad(ist.getMinutes()) + ' IST';
+            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            const generatedAt = `${ist.getDate()} ${months[ist.getMonth()]} ${ist.getFullYear()}, ${pad(ist.getHours())}:${pad(ist.getMinutes())} IST`;
 
-            const archivedUsers = Object.values(archivedMap);
-            // No _resumeIndex in final save — signals next run to use incremental mode
-            await saveGist({ rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt, archivedUsers });
-            console.log(`Done! ${totalCalls.toLocaleString()} total calls, ${rows.length} active users, ${archivedUsers.length} archived`);
+            await saveGist({ rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt });
+            console.log(`Done! ${totalCalls.toLocaleString()} total calls, ${rows.length} users`);
           }
 
           main().catch(err => { console.error(err); process.exit(1); });
