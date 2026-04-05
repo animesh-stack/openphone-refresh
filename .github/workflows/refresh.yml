@@ -147,8 +147,18 @@ jobs:
             });
             console.log(`${allPhoneNumbers.length} phone numbers, ${Object.keys(numById).length} mapped`);
 
-            // Remove deleted users
-            const activeEmails = new Set(Object.values(numById).map(u => u.email));
+            // Build set of ALL active emails (with or without number)
+            const activeEmails = new Set(Object.values(userById).map(u => u.email));
+
+            // Add users who have no number yet — show them with empty number
+            Object.values(userById).forEach(u => {
+              if (!pivotData[u.email]) {
+                pivotData[u.email] = { ...u, number: '', months: {}, days: {}, total: 0 };
+                console.log(`  Added numberless user: ${u.email}`);
+              }
+            });
+
+            // Remove deleted users (not in API at all)
             const today = new Date().toISOString().slice(0, 10);
             Object.keys(pivotData).forEach(email => {
               if (!activeEmails.has(email)) {
