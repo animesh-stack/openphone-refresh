@@ -129,10 +129,14 @@ jobs:
             // Smart lookback:
             // - Good data (>=118 users) → incremental from last fetch
             // - Incomplete data → full history, but resume from last checkpoint if available
-            const hasGoodData = existing && existing.rows && existing.rows.length >= 110;
+            const hasGoodData = existing && existing.rows && existing.rows.length >= 100;
             const OVERLAP_MS = 20 * 60 * 1000;
             const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
+            // Resume from checkpoint only during full history fetch
             const resumeFromIndex = (!hasGoodData && existing && existing._resumeIndex) ? existing._resumeIndex : 0;
+            if (hasGoodData && existing && existing._resumeIndex) {
+              console.log('Clearing stale resume index — switching to incremental mode');
+            }
             const lookbackDate = hasGoodData && lastFetch
               ? new Date(lastFetch.getTime() - OVERLAP_MS)
               : new Date('2024-06-01T00:00:00Z');
@@ -196,9 +200,13 @@ jobs:
                 const oldNum = String(existing.number || '').replace(/[^0-9]/g, '');
                 const newNum = String(u.number || '').replace(/[^0-9]/g, '');
                 if (oldNum && newNum && oldNum !== newNum) {
-                  console.log(`  Number change: ${u.email}: ${oldNum} → ${newNum}`);
-                  existing.previousNumber  = oldNum;
-                  existing.numberChangedAt = today;
+                  // Only log if not already recorded today (avoid re-detecting on every run)
+                  const alreadyRecorded = existing.numberChangedAt === today;
+                  if (!alreadyRecorded) {
+                    console.log(`  Number change: ${u.email}: ${oldNum} → ${newNum}`);
+                    existing.previousNumber  = oldNum;
+                    existing.numberChangedAt = today;
+                  }
                 }
                 existing.firstName = u.firstName;
                 existing.lastName  = u.lastName;
@@ -299,6 +307,7 @@ jobs:
             const generatedAt = ist.getDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][ist.getMonth()] + ' ' + ist.getFullYear() + ', ' + pad(ist.getHours()) + ':' + pad(ist.getMinutes()) + ' IST';
 
             const archivedUsers = Object.values(archivedMap);
+            // No _resumeIndex in final save — signals next run to use incremental mode
             await saveGist({ rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt, archivedUsers });
             console.log(`Done! ${totalCalls.toLocaleString()} total calls, ${rows.length} active users, ${archivedUsers.length} archived`);
           }
