@@ -1,9 +1,7 @@
 name: OpenPhone Hourly Refresh
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'  # Every 30 minutes
-  workflow_dispatch:        # Allow manual trigger from GitHub UI
+  workflow_dispatch:        # Triggered by cron-job.org every 30 min
 
 concurrency:
   group: openphone-refresh  # Only one run at a time
@@ -164,14 +162,41 @@ jobs:
             // Update existing user info with fresh data from API
             // Track number changes with timestamp
             const today = new Date().toISOString().slice(0, 10);
+
+            // Build set of active emails from API
+            const activeEmails = new Set(Object.values(numById).map(u => u.email));
+
+            // Load existing archived users (preserve across runs)
+            const archivedMap = {};
+            if (existing && existing.archivedUsers) {
+              existing.archivedUsers.forEach(u => { archivedMap[u.email] = u; });
+            }
+
+            // Move deleted users to archive instead of deleting
+            const nowArchived = [];
+            Object.keys(pivotData).forEach(email => {
+              if (!activeEmails.has(email)) {
+                const u = pivotData[email];
+                if (!archivedMap[email]) {
+                  // First time archiving this user
+                  archivedMap[email] = { ...u, archivedAt: today };
+                  nowArchived.push(email);
+                }
+                delete pivotData[email];
+              }
+            });
+            if (nowArchived.length > 0) {
+              console.log(`Archived ${nowArchived.length} removed user(s): ${nowArchived.join(', ')}`);
+            }
+
+            // Update info and track number changes for active users
             Object.values(numById).forEach(u => {
               if (pivotData[u.email]) {
                 const existing = pivotData[u.email];
-                // Detect number change
                 const oldNum = String(existing.number || '').replace(/[^0-9]/g, '');
                 const newNum = String(u.number || '').replace(/[^0-9]/g, '');
                 if (oldNum && newNum && oldNum !== newNum) {
-                  console.log(`  Number change detected for ${u.email}: ${oldNum} → ${newNum}`);
+                  console.log(`  Number change: ${u.email}: ${oldNum} → ${newNum}`);
                   existing.previousNumber  = oldNum;
                   existing.numberChangedAt = today;
                 }
@@ -252,7 +277,7 @@ jobs:
                 const partialTotal = partialRows.reduce((s,u)=>s+u.total,0);
                 const partialMax = partialRows.length ? Math.max(...partialRows.flatMap(u=>Object.values(u.months))) : 1;
                 // Store resume index so next run continues from here if timeout occurs
-                await saveGist({ rows: partialRows, allMonths: partialMonths, totalCalls: partialTotal, globalMax: partialMax, fetchedAt: new Date().toISOString(), generatedAt: 'Refreshing...', _resumeIndex: i + 1 });
+                await saveGist({ rows: partialRows, allMonths: partialMonths, totalCalls: partialTotal, globalMax: partialMax, fetchedAt: new Date().toISOString(), generatedAt: 'Refreshing...', _resumeIndex: i + 1, archivedUsers: Object.values(archivedMap) });
                 console.log(`  Checkpoint saved: ${partialTotal.toLocaleString()} calls, ${partialRows.length} users (resume index: ${i+1})`);
               }
               await sleep(200);
@@ -273,8 +298,9 @@ jobs:
             const pad = n => String(n).padStart(2,'0');
             const generatedAt = ist.getDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][ist.getMonth()] + ' ' + ist.getFullYear() + ', ' + pad(ist.getHours()) + ':' + pad(ist.getMinutes()) + ' IST';
 
-            await saveGist({ rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt });
-            console.log(`Done! ${totalCalls.toLocaleString()} total calls, ${rows.length} users`);
+            const archivedUsers = Object.values(archivedMap);
+            await saveGist({ rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt, archivedUsers });
+            console.log(`Done! ${totalCalls.toLocaleString()} total calls, ${rows.length} active users, ${archivedUsers.length} archived`);
           }
 
           main().catch(err => { console.error(err); process.exit(1); });
