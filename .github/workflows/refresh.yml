@@ -233,18 +233,10 @@ jobs:
 
             async function processNumber(pn) {
               const user = numById[pn.id];
-              // Wrap entire number processing in a 3-minute timeout
-              return new Promise(async (resolve, reject) => {
-                const timer = setTimeout(() => {
-                  console.log(`  TIMEOUT skipping ${user.email} after 3 min`);
-                  resolve(); // skip this number, don't fail
-                }, 3 * 60 * 1000);
-
-                try {
-                  // Get conversations for this number
-                  let convPage = null;
-                  const participantNums = new Set();
-                  do {
+              // Get conversations for this number
+              let convPage = null;
+              const participantNums = new Set();
+              do {
                 const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50 });
                 if (createdAfter > '2024-06-02') p.set('updatedAfter', createdAfter);
                 if (convPage) p.set('pageToken', convPage);
@@ -287,7 +279,14 @@ jobs:
 
             // Process sequentially — skip already-processed numbers if resuming
             for (let i = resumeFromIndex; i < uniqueNumbers.length; i++) {
-              await processNumber(uniqueNumbers[i]);
+              // 3 min timeout per number — skip if hanging
+              await Promise.race([
+                processNumber(uniqueNumbers[i]),
+                new Promise(res => setTimeout(() => {
+                  console.log(`  TIMEOUT: skipping number ${i+1} after 3 min`);
+                  res();
+                }, 3 * 60 * 1000))
+              ]);
               if ((i + 1) % 5 === 0) {
                 console.log(`  ${i+1}/${uniqueNumbers.length} numbers, ${totalFetched} calls`);
               }
