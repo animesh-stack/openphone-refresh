@@ -91,6 +91,18 @@
   tbody tr:hover td.totc { background: #e0e7ff; }
   .no-results { text-align: center; padding: 48px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; }
 
+  /* Archived users */
+  .archived-section { margin: 0 20px 16px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .archived-toggle-btn { width: 100%; padding: 10px 16px; background: var(--bg); border: none; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; font-size: 0.75rem; color: var(--muted); text-align: left; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); }
+  .archived-toggle-btn:hover { background: #f0f0f0; color: var(--text); }
+  .archived-table-wrap { overflow: auto; }
+  .archived-table-wrap table thead tr { background: #6b7280; }
+  .archived-table-wrap table tbody tr { opacity: 0.7; }
+  .archived-table-wrap table tbody tr:hover { opacity: 1; background: #f9fafb; }
+  .archived-table-wrap table tbody td { background: #f9fafb !important; }
+  .archived-table-wrap table tbody td.totc { background: #f3f4f6 !important; border-left-color: #9ca3af; color: #6b7280; }
+  .archived-badge-pill { display:inline-flex;align-items:center;gap:3px;padding:2px 7px;background:#e5e7eb;color:#6b7280;border-radius:8px;font-size:0.62rem;font-weight:700;font-family:'IBM Plex Mono',monospace; }
+
   /* Inactive alerts */
   .inactive-section { margin: 12px 20px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; overflow: hidden; }
   .inactive-header { padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
@@ -301,6 +313,20 @@
   <div class="table-wrap">
     <table><thead id="tHead"></thead><tbody id="tBody"></tbody></table>
   </div>
+
+  <!-- Archived Users Section (hidden by default) -->
+  <div id="archivedSection" style="display:none">
+    <button class="archived-toggle-btn" onclick="toggleArchivedSection()">
+      <span id="archivedToggleIcon">&#9658;</span>
+      <span>&#128451; <span id="archivedToggleLabel">Show archived users</span></span>
+    </button>
+    <div id="archivedTableWrap" class="archived-section archived-table-wrap" style="display:none">
+      <table>
+        <thead id="archivedTHead"></thead>
+        <tbody id="archivedTBody"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast">
@@ -382,6 +408,64 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 
 // OpenPhone API calls handled by GitHub Actions only — not from browser
+
+// ── Archived Users ───────────────────────────────────────────────────────
+let _archivedOpen = false;
+
+function toggleArchivedSection() {
+  _archivedOpen = !_archivedOpen;
+  const wrap = document.getElementById('archivedTableWrap');
+  const icon = document.getElementById('archivedToggleIcon');
+  wrap.style.display = _archivedOpen ? 'block' : 'none';
+  icon.textContent = _archivedOpen ? '▼' : '▶';
+  if (_archivedOpen) renderArchivedTable();
+}
+
+function renderArchivedTable() {
+  const archived = (dashData && dashData.archivedUsers) ? dashData.archivedUsers : [];
+  if (!archived.length) return;
+
+  const { from, to } = getDateRange();
+  const daily = useDailyMode(from, to);
+  const cols  = daily ? getDayRange(from, to) : getVisibleMonths();
+  const getVal = (u, key) => daily ? ((u.days||{})[key]||0) : ((u.months||{})[key]||0);
+  const fmtCol = daily ? fmtDay : fmtM;
+
+  document.getElementById('archivedTHead').innerHTML = `<tr>
+    <th>Email</th><th>First</th><th>Last</th><th>Archived On</th><th>Number</th>
+    ${cols.map(k => `<th class="mc">${fmtCol(k)}</th>`).join('')}
+    <th class="tc">TOTAL</th>
+  </tr>`;
+
+  document.getElementById('archivedTBody').innerHTML = archived.map(u => {
+    const viewTotal = cols.reduce((a, k) => a + getVal(u, k), 0);
+    const cells = cols.map(k => {
+      const c = getVal(u, k);
+      return `<td class="cc">${c || ''}</td>`;
+    }).join('');
+    return `<tr>
+      <td class="ec" style="color:var(--muted)">${u.email}</td>
+      <td class="fnc" style="color:var(--muted)">${u.firstName}</td>
+      <td class="lnc">${u.lastName}</td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--muted)">${u.archivedAt || '—'}</td>
+      <td class="nc" style="color:var(--muted)">${u.number || '—'}</td>
+      ${cells}
+      <td class="totc" style="color:#6b7280;background:#f3f4f6">${viewTotal.toLocaleString()}</td>
+    </tr>`;
+  }).join('');
+}
+
+function updateArchivedSection() {
+  const archived = (dashData && dashData.archivedUsers) ? dashData.archivedUsers : [];
+  const section = document.getElementById('archivedSection');
+  if (!archived.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+  const label = document.getElementById('archivedToggleLabel');
+  label.textContent = _archivedOpen
+    ? `Hide archived users (${archived.length})`
+    : `Show archived users (${archived.length})`;
+  if (_archivedOpen) renderArchivedTable();
+}
 
 // ── Inactive User Alerts ─────────────────────────────────────────────────
 const INACTIVE_DAYS = 7; // threshold
@@ -1062,6 +1146,8 @@ function render() {
 
   // Update inactive section with ALL rows (not filtered) so alert is always accurate
   updateInactiveSection(dashData.rows);
+  // Update archived section
+  updateArchivedSection();
 
   document.getElementById('tBody').innerHTML = data.map(u => {
     const inactive = isUserInactive(u);
