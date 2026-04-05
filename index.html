@@ -1,1211 +1,267 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpenPhone · Outgoing Calls Dashboard</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
-
-  :root {
-    --bg: #f5f5f2; --surface: #fff; --border: #e2e2da;
-    --accent: #1a1a2e; --indigo: #4f46e5; --muted: #888880; --text: #1a1a1a;
-    --green: #16a34a; --red: #dc2626;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', sans-serif; min-height: 100vh; }
-
-  /* Loading */
-  #loadingScreen {
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: center; min-height: 100vh; gap: 20px;
-  }
-  .logo { font-size: 2.5rem; }
-  .loading-title { font-size: 1.1rem; font-weight: 700; color: var(--accent); letter-spacing: -0.3px; }
-  .loading-steps {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 20px 28px; min-width: 360px; display: flex; flex-direction: column; gap: 8px;
-  }
-  .lstep { display: flex; align-items: center; gap: 10px; font-size: 0.78rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); transition: color 0.3s; }
-  .lstep.active { color: var(--indigo); font-weight: 600; }
-  .lstep.done { color: var(--green); }
-  .lstep.error { color: var(--red); }
-  .lstep-icon { width: 16px; text-align: center; flex-shrink: 0; }
-  .progress-track { width: 360px; background: var(--border); border-radius: 3px; height: 4px; overflow: hidden; }
-  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--indigo), #818cf8); border-radius: 3px; transition: width 0.4s ease; width: 0%; }
-  .loading-sub { font-size: 0.72rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); }
-
-  /* Error */
-  #errorScreen { display: none; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 16px; padding: 24px; }
-  .error-card { background: var(--surface); border: 1px solid #fca5a5; border-radius: 12px; padding: 32px; max-width: 520px; text-align: center; }
-  .error-card h2 { color: var(--red); font-size: 1rem; margin-bottom: 8px; }
-  .error-card p { font-size: 0.78rem; color: var(--muted); font-family: 'IBM Plex Mono', monospace; line-height: 1.7; white-space: pre-wrap; word-break: break-all; }
-  .retry-btn { margin-top: 16px; padding: 8px 20px; background: var(--indigo); color: #fff; border: none; border-radius: 6px; font-size: 0.82rem; font-weight: 600; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; }
-
-  /* Dashboard */
-  #dashScreen { display: none; }
-  .top-bar { background: var(--accent); color: #fff; padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
-  .top-bar-left h1 { font-size: 0.95rem; font-weight: 700; }
-  .top-bar-left p { font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: rgba(255,255,255,0.45); margin-top: 1px; }
-  .top-bar-right { display: flex; align-items: center; gap: 10px; }
-  .gen-badge { font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: rgba(255,255,255,0.4); }
-  .refresh-btn { padding: 6px 14px; background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; transition: background 0.2s; }
-  .refresh-btn:hover { background: rgba(255,255,255,0.22); }
-  .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .stats-bar { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); }
-  .stat { flex: 1; padding: 14px 20px; border-right: 1px solid var(--border); }
-  .stat:last-child { border-right: none; }
-  .stat-label { font-size: 0.62rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 3px; }
-  .stat-value { font-size: 1.3rem; font-weight: 700; color: var(--indigo); font-family: 'IBM Plex Mono', monospace; }
-
-  .controls { padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
-  .ctrl { display: flex; flex-direction: column; gap: 4px; }
-  .ctrl label { font-size: 0.62rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
-  input[type=text], select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 7px 11px; border-radius: 6px; font-family: 'IBM Plex Sans', sans-serif; font-size: 0.8rem; outline: none; min-width: 150px; }
-  input[type=text]:focus, select:focus { border-color: var(--indigo); }
-  .export-btn { padding: 7px 16px; background: var(--indigo); color: #fff; border: none; border-radius: 6px; font-size: 0.78rem; font-weight: 600; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; align-self: flex-end; }
-  .export-btn:hover { background: #3730a3; }
-
-  .legend { padding: 7px 20px; background: var(--bg); border-bottom: 1px solid var(--border); display: flex; gap: 10px; align-items: center; font-size: 0.65rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); }
-  .li { display: flex; align-items: center; gap: 3px; }
-  .sw { width: 11px; height: 11px; border-radius: 2px; }
-
-  .table-wrap { overflow: auto; max-height: calc(100vh - 230px); }
-  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; white-space: nowrap; }
-  thead tr { background: var(--accent); color: #fff; position: sticky; top: 0; z-index: 10; }
-  thead th { padding: 9px 13px; text-align: left; font-size: 0.62rem; font-family: 'IBM Plex Mono', monospace; font-weight: 500; letter-spacing: 0.5px; border-right: 1px solid rgba(255,255,255,0.08); }
-  thead th.mc { text-align: center; min-width: 50px; }
-  thead th.tc { text-align: center; background: rgba(79,70,229,0.35); min-width: 56px; }
-  tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
-  tbody tr:hover { background: #f0f0ff; }
-  tbody td { padding: 7px 13px; border-right: 1px solid #eee; }
-  td.ec { font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; color: var(--indigo); min-width: 190px; position: sticky; left: 0; background: #fff; z-index: 5; }
-  tbody tr:hover td.ec { background: #f0f0ff; }
-  td.fnc { min-width: 88px; font-weight: 600; }
-  td.lnc { min-width: 88px; color: var(--muted); }
-  td.nc { font-family: 'IBM Plex Mono', monospace; font-size: 0.68rem; min-width: 120px; }
-  td.cc { text-align: center; font-family: 'IBM Plex Mono', monospace; font-weight: 500; padding: 7px 4px; }
-  td.totc { text-align: center; font-family: 'IBM Plex Mono', monospace; font-weight: 700; color: var(--indigo); background: #eef2ff; border-left: 2px solid var(--indigo); position: sticky; right: 0; }
-  tbody tr:hover td.totc { background: #e0e7ff; }
-  .no-results { text-align: center; padding: 48px; color: var(--muted); font-family: 'IBM Plex Mono', monospace; font-size: 0.85rem; }
-
-  /* Archived users */
-  .archived-section { margin: 0 20px 16px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  .archived-toggle-btn { width: 100%; padding: 10px 16px; background: var(--bg); border: none; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; font-size: 0.75rem; color: var(--muted); text-align: left; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--border); }
-  .archived-toggle-btn:hover { background: #f0f0f0; color: var(--text); }
-  .archived-table-wrap { overflow: auto; }
-  .archived-table-wrap table thead tr { background: #6b7280; }
-  .archived-table-wrap table tbody tr { opacity: 0.7; }
-  .archived-table-wrap table tbody tr:hover { opacity: 1; background: #f9fafb; }
-  .archived-table-wrap table tbody td { background: #f9fafb !important; }
-  .archived-table-wrap table tbody td.totc { background: #f3f4f6 !important; border-left-color: #9ca3af; color: #6b7280; }
-  .archived-badge-pill { display:inline-flex;align-items:center;gap:3px;padding:2px 7px;background:#e5e7eb;color:#6b7280;border-radius:8px;font-size:0.62rem;font-weight:700;font-family:'IBM Plex Mono',monospace; }
-
-  /* Inactive alerts */
-  .inactive-section { margin: 12px 20px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; overflow: hidden; }
-  .inactive-header { padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
-  .inactive-header-left { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; font-weight: 700; color: #c2410c; }
-  .inactive-header-right { font-size: 0.7rem; color: #9a3412; font-family: 'IBM Plex Mono', monospace; }
-  .inactive-chips { padding: 0 16px 12px; display: flex; flex-wrap: wrap; gap: 6px; }
-  .inactive-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; background: #ffedd5; border: 1px solid #fdba74; border-radius: 20px; font-size: 0.7rem; font-family: 'IBM Plex Sans', sans-serif; color: #9a3412; cursor: pointer; transition: background 0.15s; }
-  .inactive-chip:hover { background: #fed7aa; }
-  .inactive-chip .chip-team { font-size: 0.6rem; font-weight: 700; padding: 1px 5px; border-radius: 8px; margin-left: 2px; }
-  tbody tr.inactive-row td { background: #fff7ed !important; }
-  tbody tr.inactive-row:hover td { background: #ffedd5 !important; }
-  tbody tr.inactive-row td.ec { background: #fff7ed !important; }
-  tbody tr.inactive-row:hover td.ec { background: #ffedd5 !important; }
-  tbody tr.inactive-row td.totc { background: #ffedd5 !important; border-left-color: #f97316; }
-  tbody tr.inactive-row:hover td.totc { background: #fed7aa !important; }
-  .inactive-badge { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; background: #fed7aa; color: #9a3412; border-radius: 8px; font-size: 0.6rem; font-weight: 700; font-family: 'IBM Plex Mono', monospace; margin-left: 5px; }
-
-  /* Team colors */
-  .team-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; flex-shrink: 0; }
-  .team-badge { display: inline-flex; align-items: center; font-size: 0.7rem; font-weight: 600; padding: 2px 8px; border-radius: 20px; white-space: nowrap; cursor: pointer; }
-  .team-badge:hover { opacity: 0.8; }
-  td.teamc { min-width: 110px; }
-
-  /* Manage Teams Modal */
-  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 500; align-items: center; justify-content: center; }
-  .modal-overlay.show { display: flex; }
-  .modal { background: var(--surface); border-radius: 14px; width: 680px; max-height: 85vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
-  .modal-header { padding: 18px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-  .modal-header h2 { font-size: 1rem; font-weight: 700; color: var(--accent); }
-  .modal-close { background: none; border: none; font-size: 1.2rem; cursor: pointer; color: var(--muted); padding: 4px 8px; border-radius: 4px; }
-  .modal-close:hover { background: var(--bg); }
-  .modal-search { padding: 12px 24px; border-bottom: 1px solid var(--border); }
-  .modal-search input { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-family: 'IBM Plex Sans', sans-serif; font-size: 0.82rem; outline: none; background: var(--bg); }
-  .modal-search input:focus { border-color: var(--indigo); }
-  .modal-body { overflow-y: auto; flex: 1; }
-  .modal-user-row { display: flex; align-items: center; padding: 10px 24px; border-bottom: 1px solid var(--border); gap: 12px; }
-  .modal-user-row:hover { background: var(--bg); }
-  .modal-user-info { flex: 1; min-width: 0; }
-  .modal-user-name { font-weight: 600; font-size: 0.82rem; color: var(--accent); }
-  .modal-user-email { font-size: 0.68rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .modal-team-select { padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; font-family: 'IBM Plex Sans', sans-serif; font-size: 0.78rem; background: var(--bg); cursor: pointer; min-width: 130px; }
-  .modal-footer { padding: 14px 24px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-  .modal-save-btn { padding: 8px 24px; background: var(--indigo); color: #fff; border: none; border-radius: 6px; font-size: 0.82rem; font-weight: 700; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; }
-  .modal-save-btn:hover { background: #3730a3; }
-  .modal-cancel-btn { padding: 8px 16px; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; font-size: 0.82rem; cursor: pointer; font-family: 'IBM Plex Sans', sans-serif; }
-  .modal-unsaved { font-size: 0.72rem; font-family: 'IBM Plex Mono', monospace; color: var(--muted); }
-
-  /* Refresh toast */
-  .toast { display: none; position: fixed; bottom: 20px; right: 20px; background: var(--accent); color: #fff; border-radius: 10px; padding: 12px 20px; font-size: 0.78rem; font-family: 'IBM Plex Mono', monospace; box-shadow: 0 4px 20px rgba(0,0,0,0.2); z-index: 200; gap: 10px; align-items: center; }
-  .toast.show { display: flex; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .spin-icon { display: inline-block; animation: spin 0.8s linear infinite; }
-</style>
-</head>
-<body>
-
-<div id="loadingScreen">
-  <div class="logo">📞</div>
-  <div class="loading-title">OpenPhone Dashboard</div>
-  <div class="loading-steps">
-    <div class="lstep" id="ls1"><span class="lstep-icon">○</span> Fetching users</div>
-    <div class="lstep" id="ls2"><span class="lstep-icon">○</span> Fetching phone numbers</div>
-    <div class="lstep" id="ls3"><span class="lstep-icon">○</span> Fetching calls <span id="ls3count" style="margin-left:6px;opacity:0.6;font-size:0.72rem"></span></div>
-    <div class="lstep" id="ls4"><span class="lstep-icon">○</span> Building &amp; saving dashboard</div>
-  </div>
-  <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
-  <div class="loading-sub" id="loadingSub">Starting...</div>
-</div>
-
-<div id="errorScreen">
-  <div class="error-card">
-    <h2>❌ Failed to load data</h2>
-    <p id="errorMsg"></p>
-    <button class="retry-btn" onclick="location.reload()">↺ Retry</button>
-  </div>
-</div>
-
-<div id="dashScreen">
-  <div class="top-bar">
-    <div class="top-bar-left">
-      <h1>📞 OpenPhone · Outgoing Calls Dashboard</h1>
-      <p id="topBarSub">AUTO-REFRESHES EVERY 30 MIN · OUTGOING CALLS PER USER PER MONTH</p>
-    </div>
-    <div class="top-bar-right">
-      <span class="gen-badge" id="genBadge"></span>
-      <label class="refresh-btn" style="cursor:pointer" title="Upload CSV files to restore historical data">
-        ⬆ Upload CSVs
-        <input type="file" id="csvUploadInput" accept=".csv" multiple style="display:none" onchange="handleCSVUpload(event)">
-      </label>
-      <button class="refresh-btn" onclick="openTeamsModal()" style="background:rgba(255,255,255,0.08)">⚙ Manage Teams</button>
-      <button class="refresh-btn" id="checkBtn" onclick="checkForUpdates()">↻ Check for updates</button>
-      <button class="refresh-btn" id="refreshBtn" onclick="forceRefresh()" style="background:rgba(99,102,241,0.3);border-color:rgba(99,102,241,0.5)" title="Admin only">⚡ Force Refresh</button>
-    </div>
-  </div>
-
-  <!-- Empty state banner shown when no data in Gist -->
-  <div id="emptyBanner" style="display:none;background:#fefce8;border-bottom:2px solid #eab308;padding:16px 24px;gap:16px;align-items:center;flex-wrap:wrap;">
-    <div style="font-size:1.2rem">📂</div>
-    <div style="flex:1">
-      <div style="font-size:0.85rem;font-weight:700;color:#854d0e;margin-bottom:3px">No dashboard data yet</div>
-      <div style="font-size:0.75rem;color:#92400e;font-family:'IBM Plex Mono',monospace">Upload your 3 CSV files to load historical data, or click ↻ Trigger Refresh to fetch via GitHub Actions.</div>
-    </div>
-    <label style="padding:8px 18px;background:#d97706;color:#fff;border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;white-space:nowrap">
-      ⬆ Upload CSVs
-      <input type="file" accept=".csv" multiple style="display:none" onchange="handleCSVUpload(event)">
-    </label>
-    <button onclick="checkForUpdates()" style="padding:8px 18px;background:var(--indigo);color:#fff;border:none;border-radius:6px;font-size:0.82rem;font-weight:700;cursor:pointer;font-family:'IBM Plex Sans',sans-serif;white-space:nowrap">↻ Check for updates</button>
-  </div>
-
-  <div class="stats-bar" id="statsBar"></div>
-
-  <!-- Inactive Users Alert Section -->
-  <div id="inactiveSection" class="inactive-section" style="display:none">
-    <div class="inactive-header" onclick="toggleInactiveSection()">
-      <div class="inactive-header-left">
-        <span>⚠️</span>
-        <span id="inactiveTitle">0 users inactive in last 7 days</span>
-      </div>
-      <div class="inactive-header-right" id="inactiveToggleHint">▼ click to expand</div>
-    </div>
-    <div id="inactiveChips" class="inactive-chips" style="display:none"></div>
-  </div>
-
-  <div class="controls">
-    <div class="ctrl"><label>Search</label><input type="text" id="searchInput" placeholder="Name or email..."></div>
-    <div class="ctrl"><label>Sort by</label>
-      <select id="sortBy">
-        <option value="name">Name A→Z</option>
-        <option value="team">Team</option>
-        <option value="total_desc">Total Calls ↓</option>
-        <option value="total_asc">Total Calls ↑</option>
-      </select>
-    </div>
-    <div class="ctrl"><label>Heatmap</label>
-      <select id="heatToggle"><option value="on">On</option><option value="off">Off</option></select>
-    </div>
-    <div class="ctrl"><label>Date Range</label>
-      <select id="monthRange" onchange="onQuickRange()">
-        <option value="all">All time</option>
-        <option value="today">Today</option>
-        <option value="yesterday">Yesterday</option>
-        <option value="7">Last 7 days</option>
-        <option value="30">Last 30 days</option>
-        <option value="this_month">This month</option>
-        <option value="last_month">Last month</option>
-        <option value="3m">Last 3 months</option>
-        <option value="6m">Last 6 months</option>
-        <option value="12m">Last 12 months</option>
-        <option value="custom">Custom range...</option>
-      </select>
-    </div>
-    <div class="ctrl" id="dateFromCtrl" style="display:none">
-      <label>From</label>
-      <input type="date" id="dateFrom" onchange="render()" style="min-width:130px">
-    </div>
-    <div class="ctrl" id="dateToCtrl" style="display:none">
-      <label>To</label>
-      <input type="date" id="dateTo" onchange="render()" style="min-width:130px">
-    </div>
-    <div class="ctrl">
-      <label>Team</label>
-      <select id="teamFilter">
-        <option value="all">All Teams</option>
-        <option value="OLG">OLG</option>
-        <option value="Akash">Akash</option>
-        <option value="Rishabh">Rishabh</option>
-        <option value="Sumalika">Sumalika</option>
-        <option value="Pratyush">Pratyush</option>
-        <option value="Anisa">Anisa</option>
-        <option value="Admin">Admin</option>
-        <option value="Unassigned">Unassigned</option>
-      </select>
-    </div>
-    <button class="export-btn" onclick="exportCSV()">⬇ Export CSV</button>
-  </div>
-
-  <!-- Manage Teams Modal -->
-  <div class="modal-overlay" id="teamsModal">
-    <div class="modal">
-      <div class="modal-header">
-        <h2>⚙ Manage Team Assignments</h2>
-        <button class="modal-close" onclick="closeTeamsModal()">✕</button>
-      </div>
-      <div class="modal-search">
-        <input type="text" id="modalSearch" placeholder="Search by name or email..." oninput="renderModalUsers()">
-      </div>
-      <div class="modal-body" id="modalBody"></div>
-      <div class="modal-footer">
-        <span class="modal-unsaved" id="modalUnsaved"></span>
-        <div style="display:flex;gap:8px">
-          <button class="modal-cancel-btn" onclick="closeTeamsModal()">Cancel</button>
-          <button class="modal-save-btn" onclick="saveTeams()">💾 Save Teams</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="legend">
-    Heat:
-    <span class="li"><span class="sw" style="background:#eef2ff;border:1px solid #ccc"></span>0</span>
-    <span class="li"><span class="sw" style="background:#c7d2fe"></span>low</span>
-    <span class="li"><span class="sw" style="background:#818cf8"></span>mid</span>
-    <span class="li"><span class="sw" style="background:#4f46e5"></span>high</span>
-    <span class="li"><span class="sw" style="background:#3730a3"></span>top</span>
-    <span style="margin-left:auto;font-size:0.65rem;font-family:'IBM Plex Mono',monospace;color:var(--muted)" id="rowCount"></span>
-  </div>
-
-  <div class="table-wrap">
-    <table><thead id="tHead"></thead><tbody id="tBody"></tbody></table>
-  </div>
-
-  <!-- Archived Users Section (hidden by default) -->
-  <div id="archivedSection" style="display:none">
-    <button class="archived-toggle-btn" onclick="toggleArchivedSection()">
-      <span id="archivedToggleIcon">&#9658;</span>
-      <span>&#128451; <span id="archivedToggleLabel">Show archived users</span></span>
-    </button>
-    <div id="archivedTableWrap" class="archived-section archived-table-wrap" style="display:none">
-      <table>
-        <thead id="archivedTHead"></thead>
-        <tbody id="archivedTBody"></tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-<div class="toast" id="toast">
-  <span class="spin-icon">↻</span>
-  <span id="toastMsg">Refreshing from OpenPhone...</span>
-  <span id="toastProgress" style="opacity:0.6;margin-left:4px;font-size:0.7rem"></span>
-</div>
-
-<script>
-// ── CONFIG (no secrets here — tokens live only in GitHub Actions secrets) ──
-const GIST_ID       = 'eb3ce9edc8e58d0042a745c0e560b731'; // main data gist (public read)
-const TEAMS_BIN_ID  = '69d0f9bfaaba882197c3c8a7'; // public JSONBin for team mappings — no token needed
-const UPLOAD_PASS   = 'codeyoung2024'; // password to protect CSV upload
-const REFRESH_PASS  = 'codeyoung2024'; // password to protect force refresh
-const TEAMS_PASS    = 'codeyoung2024'; // password to protect team editing
-const GIST_FILE     = 'data.json';
-const TEAMS_FILE    = 'teams.json';
-const CACHE_TTL_MS  = 30 * 60 * 1000; // 30 minutes — matches cron-job.org schedule
-
-// Team config
-const TEAM_NAMES  = ['OLG', 'Akash', 'Rishabh', 'Sumalika', 'Pratyush', 'Anisa', 'Admin'];
-const TEAM_COLORS = {
-  'OLG':       { bg: '#dbeafe', text: '#1e40af', dot: '#3b82f6' },
-  'Akash':     { bg: '#dcfce7', text: '#166534', dot: '#22c55e' },
-  'Rishabh':   { bg: '#ede9fe', text: '#5b21b6', dot: '#8b5cf6' },
-  'Sumalika':  { bg: '#ffedd5', text: '#9a3412', dot: '#f97316' },
-  'Pratyush':  { bg: '#fce7f3', text: '#9d174d', dot: '#ec4899' },
-  'Anisa':     { bg: '#ccfbf1', text: '#134e4a', dot: '#14b8a6' },
-  'Admin':     { bg: '#fee2e2', text: '#991b1b', dot: '#ef4444' },
-  'Unassigned':{ bg: '#f3f4f6', text: '#6b7280', dot: '#9ca3af' },
-};
-
-let dashData = null;
-
-// ── Boot ──────────────────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', async () => {
-  try {
-    setSub('Loading dashboard data...');
-    setProgress(10);
-
-    let cached = null;
-    try { cached = await fetchGist(); } catch(e) {}
-
-    setProgress(80);
-
-    if (cached && cached.rows && cached.rows.length > 0) {
-      dashData = cached;
-      // Also fetch teams
-      await fetchTeamsGist();
-      setProgress(100);
-      showDashboard(); // populateTeamFilter called inside showDashboard
-
-      // Check if data is stale (> 1 hour) — if so, refresh silently in background
-      const age = cached.fetchedAt ? Date.now() - new Date(cached.fetchedAt).getTime() : Infinity;
-      const msUntilNextRefresh = age > 15 * 60 * 1000
-        ? 2000  // stale: start immediately (after 2s)
-        : Math.max(5000, 15 * 60 * 1000 - age); // fresh: wait remaining time
-
-      // Auto-refresh is handled by cron-job.org → GitHub Actions every 30 min
-      // Browser just shows countdown based on last fetchedAt
-      _nextRefreshAt = new Date(cached.fetchedAt).getTime() + 30 * 60 * 1000;
-      updateBadge();
-      return;
-    }
-
-    // No data in Gist yet — show empty dashboard with upload prompt
-    // (GitHub Actions will populate it on next run, or upload CSVs manually)
-    setProgress(100);
-    dashData = { rows: [], allMonths: [], totalCalls: 0, globalMax: 1, generatedAt: null, fetchedAt: null };
-    showDashboard();
-    setTimeout(() => {
-      const banner = document.getElementById('emptyBanner');
-      if (banner) banner.style.display = 'flex';
-    }, 300);
-
-  } catch(err) {
-    showError(err.message);
-  }
-});
-
-// OpenPhone API calls handled by GitHub Actions only — not from browser
-
-// ── Archived Users ───────────────────────────────────────────────────────
-let _archivedOpen = false;
-
-function toggleArchivedSection() {
-  _archivedOpen = !_archivedOpen;
-  const wrap = document.getElementById('archivedTableWrap');
-  const icon = document.getElementById('archivedToggleIcon');
-  wrap.style.display = _archivedOpen ? 'block' : 'none';
-  icon.textContent = _archivedOpen ? '▼' : '▶';
-  if (_archivedOpen) renderArchivedTable();
-}
-
-function renderArchivedTable() {
-  const archived = (dashData && dashData.archivedUsers) ? dashData.archivedUsers : [];
-  if (!archived.length) return;
-
-  const { from, to } = getDateRange();
-  const daily = useDailyMode(from, to);
-  const cols  = daily ? getDayRange(from, to) : getVisibleMonths();
-  const getVal = (u, key) => daily ? ((u.days||{})[key]||0) : ((u.months||{})[key]||0);
-  const fmtCol = daily ? fmtDay : fmtM;
-
-  document.getElementById('archivedTHead').innerHTML = `<tr>
-    <th>Email</th><th>First</th><th>Last</th><th>Archived On</th><th>Number</th>
-    ${cols.map(k => `<th class="mc">${fmtCol(k)}</th>`).join('')}
-    <th class="tc">TOTAL</th>
-  </tr>`;
-
-  document.getElementById('archivedTBody').innerHTML = archived.map(u => {
-    const viewTotal = cols.reduce((a, k) => a + getVal(u, k), 0);
-    const cells = cols.map(k => {
-      const c = getVal(u, k);
-      return `<td class="cc">${c || ''}</td>`;
-    }).join('');
-    return `<tr>
-      <td class="ec" style="color:var(--muted)">${u.email}</td>
-      <td class="fnc" style="color:var(--muted)">${u.firstName}</td>
-      <td class="lnc">${u.lastName}</td>
-      <td style="font-family:'IBM Plex Mono',monospace;font-size:0.68rem;color:var(--muted)">${u.archivedAt || '—'}</td>
-      <td class="nc" style="color:var(--muted)">${u.number || '—'}</td>
-      ${cells}
-      <td class="totc" style="color:#6b7280;background:#f3f4f6">${viewTotal.toLocaleString()}</td>
-    </tr>`;
-  }).join('');
-}
-
-function updateArchivedSection() {
-  const archived = (dashData && dashData.archivedUsers) ? dashData.archivedUsers : [];
-  const section = document.getElementById('archivedSection');
-  if (!archived.length) { section.style.display = 'none'; return; }
-  section.style.display = 'block';
-  const label = document.getElementById('archivedToggleLabel');
-  label.textContent = _archivedOpen
-    ? `Hide archived users (${archived.length})`
-    : `Show archived users (${archived.length})`;
-  if (_archivedOpen) renderArchivedTable();
-}
-
-// ── Inactive User Alerts ─────────────────────────────────────────────────
-const INACTIVE_DAYS = 7; // threshold
-
-function getInactiveUsers(rows) {
-  const today = new Date();
-  const inactive = [];
-  for (const u of rows) {
-    if (!u.days || Object.keys(u.days).length === 0) continue; // skip users with no daily data
-    let hasCall = false;
-    for (let i = 0; i < INACTIVE_DAYS; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      const dk = d.getFullYear() + '-' +
-        String(d.getMonth()+1).padStart(2,'0') + '-' +
-        String(d.getDate()).padStart(2,'0');
-      if ((u.days[dk] || 0) > 0) { hasCall = true; break; }
-    }
-    if (!hasCall) inactive.push(u);
-  }
-  return inactive;
-}
-
-function isUserInactive(u) {
-  const today = new Date();
-  if (!u.days || Object.keys(u.days).length === 0) return false;
-  for (let i = 0; i < INACTIVE_DAYS; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const dk = d.getFullYear() + '-' +
-      String(d.getMonth()+1).padStart(2,'0') + '-' +
-      String(d.getDate()).padStart(2,'0');
-    if ((u.days[dk] || 0) > 0) return false;
-  }
-  return true;
-}
-
-let _inactiveSectionOpen = false;
-function toggleInactiveSection() {
-  _inactiveSectionOpen = !_inactiveSectionOpen;
-  document.getElementById('inactiveChips').style.display = _inactiveSectionOpen ? 'flex' : 'none';
-  document.getElementById('inactiveToggleHint').textContent = _inactiveSectionOpen ? '▲ click to collapse' : '▼ click to expand';
-}
-
-function updateInactiveSection(rows) {
-  const inactive = getInactiveUsers(rows);
-  const section = document.getElementById('inactiveSection');
-  if (inactive.length === 0) { section.style.display = 'none'; return; }
-
-  section.style.display = 'block';
-  document.getElementById('inactiveTitle').textContent =
-    `${inactive.length} user${inactive.length > 1 ? 's' : ''} with no calls in last ${INACTIVE_DAYS} days`;
-
-  // Build chips
-  const chips = inactive.map(u => {
-    const team = getTeam(u.email);
-    const c = TEAM_COLORS[team] || TEAM_COLORS['Unassigned'];
-    return `<span class="inactive-chip" onclick="document.getElementById('searchInput').value='${u.firstName}';render()">
-      ${u.firstName} ${u.lastName}
-      <span class="chip-team" style="background:${c.bg};color:${c.text}">${team}</span>
-    </span>`;
-  }).join('');
-  document.getElementById('inactiveChips').innerHTML = chips;
-}
-
-// ── Teams Gist ────────────────────────────────────────────────────────────
-let teamsData = { teams: {}, teamNames: [...TEAM_NAMES] };
-let pendingTeams = null; // unsaved changes in modal
-
-async function fetchTeamsGist() {
-  try {
-    // JSONBin public bin — no API key needed for public bins
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${TEAMS_BIN_ID}/latest`);
-    if (!res.ok) return;
-    const json = await res.json();
-    const parsed = json.record;
-    if (!parsed) return;
-    teamsData = { teams: parsed.teams || {}, teamNames: parsed.teamNames || [...TEAM_NAMES] };
-    console.log('Teams loaded:', Object.keys(teamsData.teams).length, 'assignments');
-  } catch(e) { console.log('Teams fetch failed:', e.message); }
-}
-
-async function saveTeamsGist(data) {
-  // JSONBin public bin — PUT to update, no API key needed for public bins
-  const res = await fetch(`https://api.jsonbin.io/v3/b/${TEAMS_BIN_ID}`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Bin-Private': 'false'  // ensure it stays public
-    },
-    body: JSON.stringify(data)
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Teams save failed: ${res.status} - ${t}`);
-  }
-}
-
-function getTeam(email) {
-  return teamsData.teams[email] || 'Unassigned';
-}
-
-function teamBadgeHTML(email) {
-  const team = getTeam(email);
-  const c = TEAM_COLORS[team] || TEAM_COLORS['Unassigned'];
-  return `<span class="team-badge" style="background:${c.bg};color:${c.text}" onclick="filterByTeam('${team}')">
-    <span class="team-dot" style="background:${c.dot}"></span>${team}
-  </span>`;
-}
-
-function filterByTeam(team) {
-  document.getElementById('teamFilter').value = team;
-  render();
-}
-
-// ── Manage Teams Modal ────────────────────────────────────────────────────
-function openTeamsModal() {
-  pendingTeams = { ...teamsData.teams };
-  renderModalUsers();
-  // Populate team filter options in modal selects
-  document.getElementById('teamsModal').classList.add('show');
-  document.getElementById('modalSearch').value = '';
-  document.getElementById('modalUnsaved').textContent = '';
-}
-
-function closeTeamsModal() {
-  pendingTeams = null;
-  document.getElementById('teamsModal').classList.remove('show');
-}
-
-function renderModalUsers() {
-  const q = document.getElementById('modalSearch').value.toLowerCase().trim();
-  const rows = dashData ? dashData.rows.slice() : [];
-  const filtered = q ? rows.filter(u =>
-    u.email.toLowerCase().includes(q) ||
-    u.firstName.toLowerCase().includes(q) ||
-    u.lastName.toLowerCase().includes(q)
-  ) : rows;
-
-  filtered.sort((a,b) => a.firstName.toLowerCase().localeCompare(b.firstName.toLowerCase()));
-
-  const opts = ['Unassigned', ...TEAM_NAMES].map(t =>
-    `<option value="${t}">${t}</option>`
-  ).join('');
-
-  document.getElementById('modalBody').innerHTML = filtered.map(u => {
-    const current = pendingTeams[u.email] || 'Unassigned';
-    const c = TEAM_COLORS[current] || TEAM_COLORS['Unassigned'];
-    return `<div class="modal-user-row">
-      <span class="team-dot" style="background:${c.dot};width:12px;height:12px"></span>
-      <div class="modal-user-info">
-        <div class="modal-user-name">${u.firstName} ${u.lastName}</div>
-        <div class="modal-user-email">${u.email}</div>
-      </div>
-      <select class="modal-team-select" data-email="${u.email}" onchange="onModalTeamChange(this)">
-        ${['Unassigned', ...TEAM_NAMES].map(t =>
-          `<option value="${t}" ${t === current ? 'selected' : ''}>${t}</option>`
-        ).join('')}
-      </select>
-    </div>`;
-  }).join('');
-}
-
-function onModalTeamChange(sel) {
-  const email = sel.dataset.email;
-  const team = sel.value;
-  pendingTeams[email] = team === 'Unassigned' ? undefined : team;
-  if (pendingTeams[email] === undefined) delete pendingTeams[email];
-  // Update dot color
-  const row = sel.closest('.modal-user-row');
-  const dot = row.querySelector('.team-dot');
-  const c = TEAM_COLORS[team] || TEAM_COLORS['Unassigned'];
-  dot.style.background = c.dot;
-  sel.style.borderColor = c.dot;
-  document.getElementById('modalUnsaved').textContent = 'Unsaved changes';
-}
-
-async function saveTeams() {
-  const entered = prompt('Enter admin password to save team assignments:');
-  if (!entered) return;
-  if (entered !== TEAMS_PASS) { alert('❌ Incorrect password.'); return; }
-
-
-
-  const btn = document.querySelector('.modal-save-btn');
-  btn.textContent = '💾 Saving...';
-  btn.disabled = true;
-
-  try {
-    const newData = { teams: { ...pendingTeams }, teamNames: [...TEAM_NAMES] };
-    await saveTeamsGist(newData);
-    teamsData = newData;
-    pendingTeams = null;
-    document.getElementById('modalUnsaved').textContent = '✅ Saved!';
-    btn.textContent = '💾 Save Teams';
-    btn.disabled = false;
-    // Update team filter dropdown
-    populateTeamFilter();
-    render();
-    setTimeout(() => closeTeamsModal(), 800);
-  } catch(err) {
-    alert('Save failed: ' + err.message);
-    btn.textContent = '💾 Save Teams';
-    btn.disabled = false;
-  }
-}
-
-function populateTeamFilter() {
-  // Dropdown is hardcoded in HTML — nothing to do
-}
-
-// ── GitHub Gist ───────────────────────────────────────────────────────────
-async function fetchGist() {
-  try {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 8000);
-    // Public gist — no auth token needed, safe to use in public HTML
-    const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
-      headers: { 'Accept': 'application/vnd.github.v3+json' },
-      signal: controller.signal
-    });
-    clearTimeout(tid);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const raw = json.files?.[GIST_FILE]?.content;
-    if (!raw || raw === '{}') return null;
-    return JSON.parse(raw);
-  } catch(e) { return null; }
-}
-
-async function saveGist(data) {
-  // Browser cannot write to Gist without exposing token
-  // GitHub Actions handles all writes — this is a no-op in browser
-  console.log('saveGist called from browser — skipped (GitHub Actions handles writes)');
-  // Store locally so dashboard updates immediately for this session
-  dashData = data;
-}
-
-// ── Dashboard ─────────────────────────────────────────────────────────────
-function showDashboard() {
-  show('dashScreen');
-  document.getElementById('genBadge').textContent = dashData.generatedAt ? `Updated ${dashData.generatedAt}` : '';
-  const rangeText = dashData.allMonths && dashData.allMonths.length > 0
-    ? `${fmtM(dashData.allMonths[0])} → ${fmtM(dashData.allMonths[dashData.allMonths.length-1])} · `
-    : '';
-  document.getElementById('topBarSub').textContent = `AUTO-REFRESHES EVERY 30 MIN · ${rangeText}OUTGOING CALLS PER USER PER MONTH`;
-  // Initialize date range to 'all time'
-  onQuickRange();
-  ['searchInput','sortBy','heatToggle','teamFilter','monthRange'].forEach(id => {
-    const el = document.getElementById(id);
-    el.addEventListener('change', render);
-    if (id === 'searchInput') el.addEventListener('input', render);
-  });
-}
-
-// ── Check for updates (safe — just polls Gist, no GitHub Actions trigger) ──
-async function checkForUpdates() {
-  const btn = document.getElementById('checkBtn');
-  btn.disabled = true;
-  btn.textContent = '↻ Checking...';
-  document.getElementById('toast').classList.add('show');
-  document.getElementById('toastMsg').textContent = 'Checking for new data...';
-  document.getElementById('toastProgress').textContent = 'auto-refreshes every 30 min';
-
-  const currentFetchedAt = dashData ? dashData.fetchedAt : null;
-  // Just check once — no need to poll for 10 minutes
-  try {
-    const fresh = await fetchGist();
-    if (fresh && fresh.fetchedAt && fresh.fetchedAt !== currentFetchedAt) {
-      dashData = fresh;
-      document.getElementById('toast').classList.remove('show');
-      _nextRefreshAt = Date.now() + 30 * 60 * 1000;
-      updateBadge();
-      render();
-    } else {
-      document.getElementById('toast').classList.remove('show');
-      document.getElementById('toastProgress').textContent = '';
-    }
-  } catch(e) {
-    document.getElementById('toast').classList.remove('show');
-  }
-  btn.disabled = false;
-  btn.textContent = '↻ Check for updates';
-}
-
-// ── Force Refresh (admin only — password protected, triggers GitHub Actions) ─
-async function forceRefresh() {
-  const entered = prompt('Enter admin password to trigger a refresh:');
-  if (!entered) return;
-  if (entered !== REFRESH_PASS) {
-    alert('❌ Incorrect password.');
-    return;
-  }
-
-  const btn = document.getElementById('refreshBtn');
-  btn.disabled = true;
-  btn.textContent = '⚡ Triggering...';
-  document.getElementById('toast').classList.add('show');
-  document.getElementById('toastMsg').textContent = 'Triggering GitHub Actions refresh...';
-  document.getElementById('toastProgress').textContent = 'takes ~2 minutes';
-
-  try {
-    // Trigger via GitHub API (needs workflow scope token — stored only in cron-job.org)
-    // Since we can't store token in HTML, we just poll Gist and let user know
-    // GitHub Actions runs automatically every 30 min via cron-job.org
-    document.getElementById('toastMsg').textContent = 'Refresh triggered via schedule...';
-    document.getElementById('toastProgress').textContent = 'polling for new data every 15s';
-
-    const currentFetchedAt = dashData ? dashData.fetchedAt : null;
-    let attempts = 0;
-    const maxAttempts = 20; // 20 × 15s = 5 min
-
-    const poll = setInterval(async () => {
-      attempts++;
-      document.getElementById('toastProgress').textContent = `waiting... (${attempts * 15}s elapsed)`;
-      try {
-        const fresh = await fetchGist();
-        if (fresh && fresh.fetchedAt && fresh.fetchedAt !== currentFetchedAt) {
-          clearInterval(poll);
-          dashData = fresh;
-          document.getElementById('toast').classList.remove('show');
-          btn.disabled = false;
-          btn.textContent = '⚡ Force Refresh';
-          _nextRefreshAt = Date.now() + 30 * 60 * 1000;
-          updateBadge();
-          render();
-        } else if (attempts >= maxAttempts) {
-          clearInterval(poll);
-          document.getElementById('toast').classList.remove('show');
-          btn.disabled = false;
-          btn.textContent = '⚡ Force Refresh';
-          alert('cron-job.org runs every 30 min automatically. Check back soon!');
-        }
-      } catch(e) {}
-    }, 15000);
-  } catch(err) {
-    document.getElementById('toast').classList.remove('show');
-    btn.disabled = false;
-    btn.textContent = '⚡ Force Refresh';
-    alert('Error: ' + err.message);
-  }
-}
-
-async function triggerRefresh() { await checkForUpdates(); }
-async function refreshData() { await checkForUpdates(); }
-
-// ── Badge updater ────────────────────────────────────────────────────────
-let _nextRefreshAt = null;
-
-function updateBadge() {
-  if (!dashData || !dashData.generatedAt) return;
-  const badge = document.getElementById('genBadge');
-  if (_nextRefreshAt) {
-    const secsLeft = Math.max(0, Math.round((_nextRefreshAt - Date.now()) / 1000));
-    if (secsLeft <= 0) {
-      badge.textContent = `Updated ${dashData.generatedAt} · refresh due`;
-      return;
-    }
-    const mins = Math.floor(secsLeft / 60);
-    const secs = secsLeft % 60;
-    const timeStr = mins > 0 ? `${mins}m` : `${secs}s`;
-    badge.textContent = `Updated ${dashData.generatedAt} · next in ${timeStr}`;
-  } else {
-    badge.textContent = `Updated ${dashData.generatedAt}`;
-  }
-}
-
-// Start a persistent badge ticker (runs once, never resets)
-setInterval(updateBadge, 1000);
-
-// ── Silent background refresh — just polls Gist for new data ─────────────
-let _refreshing = false;
-async function silentRefresh() {
-  if (_refreshing) return;
-  _refreshing = true;
-  try {
-    const fresh = await fetchGist();
-    if (fresh && fresh.fetchedAt && (!dashData || fresh.fetchedAt !== dashData.fetchedAt)) {
-      dashData = fresh;
-      render();
-    }
-    _nextRefreshAt = Date.now() + 15 * 60 * 1000;
-  } catch(e) {}
-  finally {
-    _refreshing = false;
-    updateBadge();
-  }
-}
-
-// ── CSV Upload handler ───────────────────────────────────────────────────
-async function handleCSVUpload(event) {
-  // Password protection
-  const entered = prompt('Enter admin password to upload CSV data:');
-  if (entered === null) { event.target.value = ''; return; } // cancelled
-  if (entered !== UPLOAD_PASS) {
-    alert('❌ Incorrect password. CSV upload cancelled.');
-    event.target.value = '';
-    return;
-  }
-
-  const files = Array.from(event.target.files);
-  const callsFile   = files.find(f => f.name.toLowerCase().includes('call'));
-  const numbersFile = files.find(f => f.name.toLowerCase().includes('number'));
-  const usersFile   = files.find(f => f.name.toLowerCase().includes('user'));
-
-  if (!callsFile || !numbersFile || !usersFile) {
-    alert('Please select all 3 files: calls CSV, phone_numbers CSV, and users CSV');
-    return;
-  }
-
-  document.getElementById('refreshBtn').disabled = true;
-  document.getElementById('checkBtn').disabled = true;
-  document.getElementById('toast').classList.add('show');
-
-  try {
-    function csvParse(text) {
-      const rows = text.trim().split('\n');
-      const hdrs = rows[0].split(',').map(h => h.trim().replace(/[\r"]/g, ''));
-      return rows.slice(1).map(row => {
-        const cols = row.split(','), obj = {};
-        hdrs.forEach((h, i) => { obj[h] = (cols[i] || '').trim().replace(/[\r"]/g, ''); });
-        return obj;
-      }).filter(r => Object.values(r).some(v => v));
-    }
-    function normN(n) { return String(n).replace(/[^0-9]/g, ''); }
-    function readTxt(f) {
-      return new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = e => res(e.target.result);
-        r.onerror = rej;
-        r.readAsText(f);
-      });
-    }
-
-    document.getElementById('toastMsg').textContent = 'Reading users...';
-    const usersRows = csvParse(await readTxt(usersFile));
-    const userById = {};
-    usersRows.forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
-
-    document.getElementById('toastMsg').textContent = 'Reading phone numbers...';
-    const numRows = csvParse(await readTxt(numbersFile));
-    const numLookup = {};
-    numRows.forEach(r => {
-      const u = userById[r.entityId];
-      if (u) numLookup[normN(r.number)] = { ...u, number: normN(r.number) };
-    });
-
-    document.getElementById('toastMsg').textContent = 'Processing calls CSV...';
-    const callsText = await readTxt(callsFile);
-    const callLines = callsText.trim().split('\n');
-    const hdrs = callLines[0].split(',').map(h => h.trim().replace(/[\r"]/g, ''));
-    const idxDir  = hdrs.indexOf('direction');
-    const idxFrom = hdrs.indexOf('from');
-    const idxDate = hdrs.indexOf('createdAt');
-    const pivotData = {};
-
-    for (let i = 1; i < callLines.length; i++) {
-      const cols = callLines[i].split(',');
-      if ((cols[idxDir] || '').trim().replace(/"/g, '') !== 'outgoing') continue;
-      const rawFrom = (cols[idxFrom] || '').trim().replace(/"/g, '');
-      const dateStr = (cols[idxDate] || '').trim().replace(/"/g, '');
-      const date = new Date(dateStr);
-      if (isNaN(date)) continue;
-      const u = numLookup[normN(rawFrom)];
-      if (!u) continue;
-      // Store both monthly AND daily buckets
-      const mk = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
-      const dk = mk + '-' + String(date.getDate()).padStart(2, '0');
-      if (!pivotData[u.email]) pivotData[u.email] = { ...u, months: {}, days: {} };
-      pivotData[u.email].months[mk] = (pivotData[u.email].months[mk] || 0) + 1;
-      pivotData[u.email].days[dk]   = (pivotData[u.email].days[dk]   || 0) + 1;
-      if (i % 50000 === 0) {
-        document.getElementById('toastMsg').textContent = `Processing calls... ${Math.round(i / callLines.length * 100)}%`;
-        await new Promise(r => setTimeout(r, 0));
-      }
-    }
-
-    const rows = Object.values(pivotData);
-    rows.forEach(u => { u.total = Object.values(u.months).reduce((a, b) => a + b, 0); });
-    const monthSet = new Set();
-    rows.forEach(u => Object.keys(u.months).forEach(m => monthSet.add(m)));
-    const allMonths = Array.from(monthSet).sort();
-    const totalCalls = rows.reduce((s, u) => s + u.total, 0);
-    const globalMax = rows.length ? Math.max(...rows.flatMap(u => Object.values(u.months))) : 1;
-    const fetchedAt = new Date().toISOString();
-    const generatedAt = new Date().toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) + ' IST';
-    const payload = { rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt };
-
-    // Save processed data — GitHub Actions will pick it up via the yml file
-    // For now show dashboard locally and offer download of processed JSON
-    dashData = payload;
-    document.getElementById('toast').classList.remove('show');
-    document.getElementById('refreshBtn').disabled = false;
-    document.getElementById('checkBtn').disabled = false;
-    document.getElementById('emptyBanner').style.display = 'none';
-    showDashboard();
-
-    // Also offer to download the processed data.json so it can be uploaded to Gist manually
-    const blob = new Blob([JSON.stringify(payload)], {type: 'application/json'});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'data.json';
-    a.click();
-    alert(`✅ Done! ${totalCalls.toLocaleString()} calls for ${rows.length} users.\n\nA data.json file was downloaded — upload it to your Gist (gist.github.com/${GIST_ID}) to make it permanent for everyone.`);
-  } catch(err) {
-    document.getElementById('toast').classList.remove('show');
-    document.getElementById('refreshBtn').disabled = false;
-    document.getElementById('checkBtn').disabled = false;
-    alert('CSV upload failed: ' + err.message);
-  }
-  event.target.value = '';
-}
-
-
-function fmtM(k) {
-  if (!k) return '—';
-  return new Date(k+'-01').toLocaleString('default',{month:'short',year:'2-digit'});
-}
-
-function heat(c,max) {
-  if (!c) return '';
-  const r=c/max;
-  if (r<0.25) return 'background:#c7d2fe;color:#1e1b4b';
-  if (r<0.5)  return 'background:#818cf8;color:#fff';
-  if (r<0.75) return 'background:#4f46e5;color:#fff';
-  return 'background:#3730a3;color:#fff';
-}
-
-// ── Date range helpers ───────────────────────────────────────────────────
-function todayStr() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function addDays(dateStr, n) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
-function monthOf(dateStr) {
-  return dateStr.slice(0, 7); // YYYY-MM
-}
-
-function onQuickRange() {
-  const val = document.getElementById('monthRange').value;
-  const fromCtrl = document.getElementById('dateFromCtrl');
-  const toCtrl   = document.getElementById('dateToCtrl');
-  const today    = todayStr();
-
-  // Show/hide custom date inputs
-  const isCustom = val === 'custom';
-  fromCtrl.style.display = isCustom ? '' : 'none';
-  toCtrl.style.display   = isCustom ? '' : 'none';
-
-  if (!isCustom) {
-    // Auto-set date inputs for non-custom ranges so exportCSV works
-    let from, to;
-    if (val === 'all')         { from = dashData.allMonths[0] + '-01'; to = today; }
-    else if (val === 'today')       { from = today; to = today; }
-    else if (val === 'yesterday')   { from = addDays(today, -1); to = addDays(today, -1); }
-    else if (val === '7')           { from = addDays(today, -6); to = today; }
-    else if (val === '30')          { from = addDays(today, -29); to = today; }
-    else if (val === 'this_month')  { from = today.slice(0,7) + '-01'; to = today; }
-    else if (val === 'last_month')  {
-      const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
-      from = d.toISOString().slice(0,7) + '-01';
-      const last = new Date(d.getFullYear(), d.getMonth()+1, 0);
-      to = last.toISOString().slice(0,10);
-    }
-    else if (val === '3m')  { from = addDays(today, -89); to = today; }
-    else if (val === '6m')  { from = addDays(today, -179); to = today; }
-    else if (val === '12m') { from = addDays(today, -364); to = today; }
-    document.getElementById('dateFrom').value = from;
-    document.getElementById('dateTo').value   = to;
-  }
-  render();
-}
-
-function getDateRange() {
-  const from = document.getElementById('dateFrom').value;
-  const to   = document.getElementById('dateTo').value;
-  return { from, to };
-}
-
-// Returns true if we should use daily granularity
-function useDailyMode(from, to) {
-  if (!from || !to) return false;
-  const diff = (new Date(to) - new Date(from)) / (1000*60*60*24);
-  return diff <= 31;
-}
-
-// Generate array of YYYY-MM-DD strings between from and to inclusive
-function getDayRange(from, to) {
-  const days = [];
-  let cur = new Date(from);
-  const end = new Date(to);
-  while (cur <= end) {
-    days.push(cur.toISOString().slice(0,10));
-    cur.setDate(cur.getDate() + 1);
-  }
-  return days;
-}
-
-function fmtDay(d) {
-  // e.g. "2026-03-25" → "25 Mar"
-  const dt = new Date(d);
-  return dt.toLocaleString('default', { day: 'numeric', month: 'short' });
-}
-
-function getVisibleMonths() {
-  const { from, to } = getDateRange();
-  if (!from || !to) return dashData.allMonths;
-  const fromMonth = monthOf(from);
-  const toMonth   = monthOf(to);
-  return dashData.allMonths.filter(m => m >= fromMonth && m <= toMonth);
-}
-
-function render() {
-  const q        = document.getElementById('searchInput').value.toLowerCase().trim();
-  const sort     = document.getElementById('sortBy').value;
-  const doHeat   = document.getElementById('heatToggle').value === 'on';
-  const teamF    = document.getElementById('teamFilter').value;
-  const { from, to } = getDateRange();
-  const daily    = useDailyMode(from, to);
-
-  // Columns: daily buckets or monthly buckets
-  const cols   = daily ? getDayRange(from, to) : getVisibleMonths();
-  const getVal = (u, key) => daily ? ((u.days||{})[key]||0) : ((u.months||{})[key]||0);
-  const fmtCol = daily ? fmtDay : fmtM;
-
-  let data = dashData.rows.slice();
-  if (q) data = data.filter(u =>
-    u.email.toLowerCase().includes(q) || u.firstName.toLowerCase().includes(q) ||
-    u.lastName.toLowerCase().includes(q) || u.number.includes(q)
-  );
-  // Team filter
-  if (teamF !== 'all') data = data.filter(u => getTeam(u.email) === teamF);
-
-  // Compute totals for current view
-  data.forEach(u => { u._viewTotal = cols.reduce((a,k) => a + getVal(u,k), 0); });
-
-  if (sort === 'name')            data.sort((a,b) => a.firstName.toLowerCase().localeCompare(b.firstName.toLowerCase()));
-  else if (sort === 'team')       data.sort((a,b) => getTeam(a.email).localeCompare(getTeam(b.email)) || a.firstName.toLowerCase().localeCompare(b.firstName.toLowerCase()));
-  else if (sort === 'total_desc') data.sort((a,b) => b._viewTotal - a._viewTotal);
-  else                            data.sort((a,b) => a._viewTotal - b._viewTotal);
-
-  const filtTotal = data.reduce((s,u) => s + u._viewTotal, 0);
-
-  // Period label
-  const periodLabel = from && to
-    ? (from === to ? from : `${from} → ${to}`)
-    : (cols.length ? `${fmtCol(cols[0])} → ${fmtCol(cols[cols.length-1])}` : '—');
-
-  // Global max for heatmap in current view
-  const viewMax = data.length ? Math.max(1, ...data.map(u => u._viewTotal)) : 1;
-
-  const teamLabel = teamF !== 'all' ? teamF : 'All Teams';
-  const c = TEAM_COLORS[teamF] || null;
-  const teamDot = c ? `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${c.dot};margin-right:5px"></span>` : '';
-  document.getElementById('statsBar').innerHTML = `
-    <div class="stat"><div class="stat-label">Outgoing Calls (shown)</div><div class="stat-value">${filtTotal.toLocaleString()}</div></div>
-    <div class="stat"><div class="stat-label">Total All Time</div><div class="stat-value">${dashData.totalCalls.toLocaleString()}</div></div>
-    <div class="stat"><div class="stat-label">Users</div><div class="stat-value">${data.length} / ${dashData.rows.length}</div></div>
-    <div class="stat"><div class="stat-label">Team</div><div class="stat-value" style="font-size:0.9rem;display:flex;align-items:center">${teamDot}${teamLabel}</div></div>
-  `;
-  document.getElementById('rowCount').textContent = `${data.length} users`;
-
-  document.getElementById('tHead').innerHTML = `<tr>
-    <th>Email</th><th>First</th><th>Last</th><th class="teamc">Team</th><th>Number</th><th style="min-width:120px">Num Changed</th>
-    ${cols.map(k => `<th class="mc">${fmtCol(k)}</th>`).join('')}
-    <th class="tc">TOTAL</th>
-  </tr>`;
-
-  if (!data.length) {
-    document.getElementById('tBody').innerHTML = '<tr><td colspan="100" class="no-results">No users match your search.</td></tr>';
-    return;
-  }
-
-  // Update inactive section with ALL rows (not filtered) so alert is always accurate
-  updateInactiveSection(dashData.rows);
-  // Update archived section
-  updateArchivedSection();
-
-  document.getElementById('tBody').innerHTML = data.map(u => {
-    const inactive = isUserInactive(u);
-    const cells = cols.map(k => {
-      const c = getVal(u, k);
-      const s = doHeat ? heat(c, viewMax) : '';
-      return `<td class="cc" style="${s}" title="${fmtCol(k)}: ${c}">${c||''}</td>`;
-    }).join('');
-    const inactiveBadge = inactive ? `<span class="inactive-badge" title="No calls in last ${INACTIVE_DAYS} days">⚠ inactive</span>` : '';
-    return `<tr class="${inactive ? 'inactive-row' : ''}">
-      <td class="ec">${u.email}${inactiveBadge}</td><td class="fnc">${u.firstName}</td>
-      <td class="lnc">${u.lastName}</td>
-      <td class="teamc">${teamBadgeHTML(u.email)}</td>
-      <td class="nc">${u.number}</td>
-      <td class="nc" style="font-size:0.65rem;color:${u.previousNumber ? '#92400e' : 'var(--muted)'};min-width:140px">
-        ${u.previousNumber
-          ? `<span title="Previously: ${u.previousNumber}" style="cursor:help">🔄 ${u.numberChangedAt || '—'}</span>`
-          : '<span style="color:var(--muted)">—</span>'}
-      </td>
-      ${cells}<td class="totc">${u._viewTotal.toLocaleString()}</td>
-    </tr>`;
-  }).join('');
-}
-
-function exportCSV() {
-  const { from, to } = getDateRange();
-  const daily = useDailyMode(from, to);
-  const cols  = daily ? getDayRange(from, to) : getVisibleMonths();
-  const getVal = (u, key) => daily ? ((u.days||{})[key]||0) : ((u.months||{})[key]||0);
-  const fmtCol = daily ? (d => d) : fmtM; // use full date string for daily export
-
-  const header = ['email','firstName','lastName','team','number',...cols.map(fmtCol),'TOTAL'];
-  const lines = [header.join(',')];
-  dashData.rows.slice()
-    .sort((a,b) => a.firstName.toLowerCase().localeCompare(b.firstName.toLowerCase()))
-    .forEach(u => {
-      const vt = cols.reduce((a,k) => a + getVal(u,k), 0);
-      lines.push([u.email, u.firstName, u.lastName, getTeam(u.email), u.number, ...cols.map(k => getVal(u,k)), vt].join(','));
-    });
-  const fname = from && to ? `openphone_calls_${from}_to_${to}.csv` : 'openphone_calls.csv';
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type:'text/csv'}));
-  a.download = fname; a.click();
-}
-
-function show(id) {
-  ['loadingScreen','errorScreen','dashScreen'].forEach(s => {
-    document.getElementById(s).style.display = s===id?(s==='dashScreen'?'block':'flex'):'none';
-  });
-}
-function setStep(n,state) {
-  const el=document.getElementById(`ls${n}`);
-  el.className=`lstep ${state}`;
-  el.querySelector('.lstep-icon').textContent=state==='done'?'✓':state==='error'?'✗':state==='active'?'▶':'○';
-}
-function setProgress(pct) { document.getElementById('progressFill').style.width=pct+'%'; }
-function setSub(msg) { document.getElementById('loadingSub').textContent=msg; }
-function showError(msg) { document.getElementById('errorMsg').textContent=msg; show('errorScreen'); }
-</script>
-</body>
-</html>
+name: OpenPhone Hourly Refresh
+
+on:
+  workflow_dispatch:        # Triggered by cron-job.org every 30 minutes
+
+concurrency:
+  group: openphone-refresh
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Fetch from OpenPhone API and update Gist
+        env:
+          OP_API_KEY: ${{ secrets.OP_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: eb3ce9edc8e58d0042a745c0e560b731
+        run: |
+          node << 'EOF'
+          const https = require('https');
+
+          const OP_KEY   = process.env.OP_API_KEY;
+          const GH_TOKEN = process.env.GITHUB_TOKEN;
+          const GIST_ID  = process.env.GIST_ID;
+          const OP_BASE  = 'https://api.openphone.com/v1';
+
+          function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+          function request(url, opts = {}) {
+            return new Promise((resolve, reject) => {
+              const req = https.request(url, opts, res => {
+                let data = '';
+                res.on('data', d => data += d);
+                res.on('end', () => {
+                  try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+                  catch(e) { resolve({ status: res.statusCode, body: data }); }
+                });
+              });
+              req.setTimeout(30000, () => { req.destroy(new Error('Request timeout')); });
+              req.on('error', reject);
+              if (opts.body) req.write(opts.body);
+              req.end();
+            });
+          }
+
+          async function opGet(path, retries = 4) {
+            for (let attempt = 0; attempt <= retries; attempt++) {
+              try {
+                const r = await request(`${OP_BASE}${path}`, { headers: { 'Authorization': OP_KEY } });
+                if (r.status === 404) return { data: [], nextPageToken: null };
+                if (r.status === 429) { await sleep(5000 * (attempt + 1)); continue; }
+                if (r.status !== 200) throw new Error(`OpenPhone API ${r.status}: ${JSON.stringify(r.body)}`);
+                return r.body;
+              } catch(e) {
+                if (attempt === retries) throw e;
+                const wait = 3000 * (attempt + 1);
+                console.log(`  Retry ${attempt+1}/${retries} after ${wait}ms: ${e.message.slice(0,60)}`);
+                await sleep(wait);
+              }
+            }
+          }
+
+          async function fetchGist() {
+            const r = await request(`https://api.github.com/gists/${GIST_ID}`, {
+              headers: { 'Authorization': `token ${GH_TOKEN}`, 'User-Agent': 'openphone-refresh', 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (r.status !== 200) return null;
+            const raw = r.body.files?.['data.json']?.content;
+            if (!raw || raw === '{}') return null;
+            return JSON.parse(raw);
+          }
+
+          async function saveGist(data) {
+            const body = JSON.stringify({ files: { 'data.json': { content: JSON.stringify(data) } } });
+            const r = await request(`https://api.github.com/gists/${GIST_ID}`, {
+              method: 'PATCH',
+              headers: {
+                'Authorization': `token ${GH_TOKEN}`, 'User-Agent': 'openphone-refresh',
+                'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body)
+              },
+              body
+            });
+            if (r.status !== 200) throw new Error(`Gist save failed: ${r.status}`);
+            console.log('Saved to Gist successfully');
+          }
+
+          function normNum(n) { return String(n).replace(/[^0-9]/g, ''); }
+
+          async function main() {
+            console.log('Starting OpenPhone refresh...');
+
+            const existing = await fetchGist();
+            const pivotData = {};
+
+            if (existing && existing.rows) {
+              existing.rows.forEach(u => {
+                pivotData[u.email] = { ...u, months: { ...u.months }, days: { ...(u.days||{}) } };
+              });
+              console.log(`Loaded ${existing.rows.length} users from Gist`);
+            }
+
+            // Smart lookback
+            const activeCount = existing && existing.rows ? existing.rows.length : 0;
+            const archivedCount = existing && existing.archivedUsers ? existing.archivedUsers.length : 0;
+            const hasGoodData = (activeCount + archivedCount) >= 100;
+            const OVERLAP_MS = 20 * 60 * 1000;
+            const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
+            const resumeFromIndex = (!hasGoodData && existing && existing._resumeIndex) ? existing._resumeIndex : 0;
+            const lookbackDate = hasGoodData && lastFetch
+              ? new Date(lastFetch.getTime() - OVERLAP_MS)
+              : new Date('2024-06-01T00:00:00Z');
+            const createdAfter = lookbackDate.toISOString();
+            if (hasGoodData) console.log(`Incremental fetch since ${createdAfter}`);
+            else console.log(`Full history fetch — ${resumeFromIndex > 0 ? 'resuming from number ' + resumeFromIndex : 'starting fresh'}`);
+
+            const users = await opGet('/users?maxResults=50');
+            const userById = {};
+            (users.data || []).forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
+            console.log(`${Object.keys(userById).length} users`);
+
+            // Paginate phone numbers
+            let allPhoneNumbers = [];
+            let pnPage = null;
+            do {
+              const p = new URLSearchParams({ maxResults: 50 });
+              if (pnPage) p.set('pageToken', pnPage);
+              const r = await opGet(`/phone-numbers?${p}`);
+              allPhoneNumbers.push(...(r.data || []));
+              pnPage = r.nextPageToken || null;
+            } while (pnPage);
+
+            const numById = {};
+            allPhoneNumbers.forEach(pn => {
+              (pn.users || []).forEach(pu => {
+                const user = userById[pu.id];
+                if (user && !numById[pn.id]) {
+                  numById[pn.id] = { ...user, number: normNum(pn.number), userId: pu.id };
+                }
+              });
+            });
+            console.log(`${allPhoneNumbers.length} phone numbers, ${Object.keys(numById).length} mapped`);
+
+            // Archive removed users
+            const activeEmails = new Set(Object.values(numById).map(u => u.email));
+            const archivedMap = {};
+            if (existing && existing.archivedUsers) {
+              existing.archivedUsers.forEach(u => { archivedMap[u.email] = u; });
+            }
+            const today = new Date().toISOString().slice(0, 10);
+            const nowArchived = [];
+            Object.keys(pivotData).forEach(email => {
+              if (!activeEmails.has(email)) {
+                if (!archivedMap[email]) { archivedMap[email] = { ...pivotData[email], archivedAt: today }; nowArchived.push(email); }
+                delete pivotData[email];
+              }
+            });
+            if (nowArchived.length > 0) console.log(`Archived ${nowArchived.length} removed user(s): ${nowArchived.join(', ')}`);
+
+            // Update user info + track number changes
+            Object.values(numById).forEach(u => {
+              if (pivotData[u.email]) {
+                const existing = pivotData[u.email];
+                const oldNum = normNum(existing.number || '');
+                const newNum = normNum(u.number || '');
+                if (oldNum && newNum && oldNum !== newNum && existing.numberChangedAt !== today) {
+                  console.log(`  Number change: ${u.email}: ${oldNum} → ${newNum}`);
+                  existing.previousNumber = oldNum;
+                  existing.numberChangedAt = today;
+                }
+                existing.firstName = u.firstName;
+                existing.lastName  = u.lastName;
+                existing.number    = newNum;
+              }
+            });
+            console.log('Updated user info from API');
+
+            let totalFetched = 0;
+
+            const seen = new Set();
+            const uniqueNumbers = allPhoneNumbers.filter(pn => {
+              if (seen.has(pn.id) || !numById[pn.id]) return false;
+              seen.add(pn.id); return true;
+            });
+
+            for (let i = resumeFromIndex; i < uniqueNumbers.length; i++) {
+              const pn = uniqueNumbers[i];
+              const user = numById[pn.id];
+
+              try {
+                let convPage = null;
+                const participantNums = new Set();
+                do {
+                  const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50 });
+                  if (createdAfter > '2024-06-02') p.set('updatedAfter', createdAfter);
+                  if (convPage) p.set('pageToken', convPage);
+                  const r = await opGet(`/conversations?${p}`);
+                  (r.data || []).forEach(c => (c.participants || []).forEach(pt => participantNums.add(pt)));
+                  convPage = r.nextPageToken || null;
+                } while (convPage);
+
+                for (const participant of Array.from(participantNums)) {
+                  let callPage = null;
+                  do {
+                    const p = new URLSearchParams({ phoneNumberId: pn.id, participants: participant, maxResults: 100, createdAfter });
+                    if (callPage) p.set('pageToken', callPage);
+                    const r = await opGet(`/calls?${p}`);
+                    const calls = r.data || [];
+                    callPage = r.nextPageToken || null;
+                    calls.forEach(call => {
+                      if (call.direction !== 'outgoing') return;
+                      const date = new Date(call.createdAt);
+                      if (isNaN(date)) return;
+                      const mk = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`;
+                      const dk = `${mk}-${String(date.getDate()).padStart(2,'0')}`;
+                      if (!pivotData[user.email]) pivotData[user.email] = { ...user, months: {}, days: {} };
+                      if (!pivotData[user.email].days) pivotData[user.email].days = {};
+                      pivotData[user.email].months[mk] = (pivotData[user.email].months[mk] || 0) + 1;
+                      pivotData[user.email].days[dk]   = (pivotData[user.email].days[dk]   || 0) + 1;
+                      totalFetched++;
+                    });
+                  } while (callPage);
+                }
+              } catch(e) {
+                console.log(`  Error on number ${i+1}: ${e.message} — skipping`);
+              }
+
+              if ((i + 1) % 5 === 0) console.log(`  ${i+1}/${uniqueNumbers.length} numbers, ${totalFetched} calls`);
+
+              if ((i + 1) % 10 === 0) {
+                const partialRows = Object.values(pivotData);
+                partialRows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
+                const ms = new Set(); partialRows.forEach(u => Object.keys(u.months).forEach(m => ms.add(m)));
+                const partialMonths = Array.from(ms).sort();
+                const partialTotal = partialRows.reduce((s,u)=>s+u.total,0);
+                const partialMax = partialRows.length ? Math.max(...partialRows.flatMap(u=>Object.values(u.months))) : 1;
+                await saveGist({ rows: partialRows, allMonths: partialMonths, totalCalls: partialTotal, globalMax: partialMax, fetchedAt: new Date().toISOString(), generatedAt: 'Refreshing...', _resumeIndex: i + 1, archivedUsers: Object.values(archivedMap) });
+                console.log(`  Checkpoint saved: ${partialTotal.toLocaleString()} calls, ${partialRows.length} users (resume index: ${i+1})`);
+              }
+
+              await sleep(200);
+            }
+
+            console.log(`Total new calls fetched: ${totalFetched}`);
+
+            const rows = Object.values(pivotData);
+            rows.forEach(u => { u.total = Object.values(u.months).reduce((a,b)=>a+b,0); });
+            const monthSet = new Set();
+            rows.forEach(u => Object.keys(u.months).forEach(m => monthSet.add(m)));
+            const allMonths = Array.from(monthSet).sort();
+            const totalCalls = rows.reduce((s,u)=>s+u.total,0);
+            const globalMax = rows.length ? Math.max(...rows.flatMap(u=>Object.values(u.months))) : 1;
+            const fetchedAt = new Date().toISOString();
+            const ist = new Date(new Date().toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
+            const pad = n => String(n).padStart(2,'0');
+            const generatedAt = ist.getDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][ist.getMonth()] + ' ' + ist.getFullYear() + ', ' + pad(ist.getHours()) + ':' + pad(ist.getMinutes()) + ' IST';
+            const archivedUsers = Object.values(archivedMap);
+
+            await saveGist({ rows, allMonths, totalCalls, globalMax, fetchedAt, generatedAt, archivedUsers });
+            console.log(`Done! ${totalCalls.toLocaleString()} total calls, ${rows.length} active users, ${archivedUsers.length} archived`);
+          }
+
+          main().catch(err => { console.error(err); process.exit(1); });
+          EOF
