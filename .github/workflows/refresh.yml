@@ -113,10 +113,16 @@ jobs:
             if (hasGoodData) console.log(`Incremental fetch since ${createdAfter}`);
             else console.log(`Full history fetch — ${resumeFromIndex > 0 ? 'resuming from number ' + resumeFromIndex : 'starting fresh'}`);
 
-            // Fetch users
-            const users = await opGet('/users?maxResults=50');
+            // Fetch ALL users (paginated)
             const userById = {};
-            (users.data || []).forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
+            let userPage = null;
+            do {
+              const p = new URLSearchParams({ maxResults: 50 });
+              if (userPage) p.set('pageToken', userPage);
+              const r = await opGet(`/users?${p}`);
+              (r.data || []).forEach(u => { userById[u.id] = { email: u.email, firstName: u.firstName, lastName: u.lastName }; });
+              userPage = r.nextPageToken || null;
+            } while (userPage);
             console.log(`${Object.keys(userById).length} users`);
 
             // Fetch phone numbers
