@@ -38,6 +38,10 @@ jobs:
                   catch(e) { resolve({ status: res.statusCode, body: data }); }
                 });
               });
+              // 30 second timeout per request — prevents hanging forever
+              req.setTimeout(30000, () => {
+                req.destroy(new Error('Request timeout after 30s'));
+              });
               req.on('error', reject);
               if (opts.body) req.write(opts.body);
               req.end();
