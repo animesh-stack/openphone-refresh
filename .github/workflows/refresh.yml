@@ -233,10 +233,18 @@ jobs:
 
             async function processNumber(pn) {
               const user = numById[pn.id];
-              // Get conversations for this number
-              let convPage = null;
-              const participantNums = new Set();
-              do {
+              // Wrap entire number processing in a 3-minute timeout
+              return new Promise(async (resolve, reject) => {
+                const timer = setTimeout(() => {
+                  console.log(`  TIMEOUT skipping ${user.email} after 3 min`);
+                  resolve(); // skip this number, don't fail
+                }, 3 * 60 * 1000);
+
+                try {
+                  // Get conversations for this number
+                  let convPage = null;
+                  const participantNums = new Set();
+                  do {
                 const p = new URLSearchParams({ phoneNumbers: pn.id, maxResults: 50 });
                 if (createdAfter > '2024-06-02') p.set('updatedAfter', createdAfter);
                 if (convPage) p.set('pageToken', convPage);
