@@ -102,7 +102,7 @@ jobs:
             }
 
             // Smart lookback — incremental if good data, full history if not
-            const hasGoodData = existing && existing.rows && existing.rows.length >= 100;
+            const hasGoodData = existing && existing.rows && existing.rows.length >= 50;
             const OVERLAP_MS = 20 * 60 * 1000;
             const lastFetch = existing && existing.fetchedAt ? new Date(existing.fetchedAt) : null;
             const resumeFromIndex = (!hasGoodData && existing && existing._resumeIndex) ? existing._resumeIndex : 0;
