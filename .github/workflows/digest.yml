@@ -1,0 +1,310 @@
+name: OpenPhone Daily Digest
+
+on:
+  schedule:
+    - cron: '30 5 * * *'  # 5:30 AM UTC = 11:00 AM IST
+  workflow_dispatch:       # Allow manual trigger for testing
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Generate and send daily digest
+        env:
+          GIST_ID: eb3ce9edc8e58d0042a745c0e560b731
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DIGEST_RECIPIENTS: ${{ secrets.DIGEST_RECIPIENTS }}
+        run: |
+          node << 'EOF'
+          const https = require('https');
+
+          const GIST_ID    = process.env.GIST_ID;
+          const API_KEY    = process.env.RESEND_API_KEY;
+          const RECIPIENTS = (process.env.DIGEST_RECIPIENTS || '').split(',').map(e => e.trim()).filter(Boolean);
+
+          function request(url, opts = {}) {
+            return new Promise((resolve, reject) => {
+              const req = https.request(url, opts, res => {
+                let data = '';
+                res.on('data', d => data += d);
+                res.on('end', () => {
+                  try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+                  catch(e) { resolve({ status: res.statusCode, body: data }); }
+                });
+              });
+              req.on('error', reject);
+              if (opts.body) req.write(opts.body);
+              req.end();
+            });
+          }
+
+          async function fetchGist() {
+            const r = await request(`https://api.github.com/gists/${GIST_ID}`, {
+              headers: { 'User-Agent': 'openphone-digest', 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (r.status !== 200) throw new Error(`Gist fetch failed: ${r.status}`);
+            const raw = r.body.files?.['data.json']?.content;
+            if (!raw) throw new Error('No data.json in Gist');
+            return JSON.parse(raw);
+          }
+
+          function getDateKey(daysAgo) {
+            const d = new Date();
+            d.setDate(d.getDate() - daysAgo);
+            return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          }
+
+          function formatNum(n) { return Number(n).toLocaleString(); }
+
+          function getTeamColor(team) {
+            const colors = {
+              'OLG': '#3b82f6', 'Akash': '#22c55e', 'Rishabh': '#8b5cf6',
+              'Sumalika': '#f97316', 'Pratyush': '#ec4899', 'Anisa': '#14b8a6',
+              'Admin': '#ef4444', 'Unassigned': '#9ca3af'
+            };
+            return colors[team] || '#9ca3af';
+          }
+
+          const TEAMS_BIN_ID = '69d0f9bfaaba882197c3c8a7';
+
+          async function fetchTeams() {
+            try {
+              const r = await request(`https://api.jsonbin.io/v3/b/${TEAMS_BIN_ID}/latest`, {
+                headers: { 'X-Access-Key': '' }
+              });
+              if (r.status !== 200) return {};
+              return r.body.record?.teams || {};
+            } catch(e) {
+              console.log('Teams fetch failed:', e.message);
+              return {};
+            }
+          }
+
+          async function main() {
+            console.log('Fetching dashboard data...');
+            const [data, teams] = await Promise.all([fetchGist(), fetchTeams()]);
+            const rows = (data.rows || []).map(u => ({
+              ...u,
+              team: teams[u.email] || 'Unassigned'
+            }));
+
+            // ── Date keys ────────────────────────────────────────────────
+            const yesterday = getDateKey(1);
+            const dayKeys7  = Array.from({length: 7}, (_, i) => getDateKey(i + 1));
+
+            // ── YESTERDAY stats ──────────────────────────────────────────
+            const yesterdayStats = rows.map(u => ({
+              ...u,
+              ydCalls: (u.days || {})[yesterday] || 0
+            })).sort((a, b) => b.ydCalls - a.ydCalls);
+
+            const ydTotal    = yesterdayStats.reduce((s, u) => s + u.ydCalls, 0);
+            const ydActive   = yesterdayStats.filter(u => u.ydCalls > 0).length;
+            const ydInactive = yesterdayStats.filter(u => u.ydCalls === 0);
+            const ydTop5     = yesterdayStats.filter(u => u.ydCalls > 0).slice(0, 5);
+
+            // ── LAST 7 DAYS stats ─────────────────────────────────────────
+            const weekStats = rows.map(u => ({
+              ...u,
+              weekCalls: dayKeys7.reduce((s, dk) => s + ((u.days || {})[dk] || 0), 0),
+              lastActive: dayKeys7.find(dk => ((u.days || {})[dk] || 0) > 0) || null
+            })).sort((a, b) => b.weekCalls - a.weekCalls);
+
+            const weekTotal    = weekStats.reduce((s, u) => s + u.weekCalls, 0);
+            const weekActive   = weekStats.filter(u => u.weekCalls > 0).length;
+            const weekInactive = weekStats.filter(u => u.weekCalls === 0);
+            const weekTop5     = weekStats.filter(u => u.weekCalls > 0).slice(0, 5);
+
+            // ── IST date label ────────────────────────────────────────────
+            const ist = new Date(new Date().toLocaleString('en-US', {timeZone: 'Asia/Kolkata'}));
+            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            const dateLabel = `${ist.getDate()} ${months[ist.getMonth()]} ${ist.getFullYear()}`;
+            const ydDate = (() => {
+              const d = new Date(ist); d.setDate(d.getDate() - 1);
+              return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+            })();
+
+            // ── Build HTML email ─────────────────────────────────────────
+            const topCallerRows = (callers, callKey) => callers.map((u, i) => {
+              const team = u.team || 'Unassigned';
+              const color = getTeamColor(team);
+              const calls = u[callKey];
+              return `
+                <tr>
+                  <td style="padding:10px 16px;border-bottom:1px solid #f3f4f6;font-size:13px;color:#374151">
+                    <span style="font-weight:700;color:#6b7280;margin-right:8px">#${i+1}</span>
+                    ${u.firstName} ${u.lastName}
+                  </td>
+                  <td style="padding:10px 16px;border-bottom:1px solid #f3f4f6;font-size:12px">
+                    <span style="background:${color}22;color:${color};padding:2px 8px;border-radius:12px;font-weight:600">${team}</span>
+                  </td>
+                  <td style="padding:10px 16px;border-bottom:1px solid #f3f4f6;font-size:13px;font-weight:700;color:#4f46e5;text-align:right">
+                    ${formatNum(calls)}
+                  </td>
+                </tr>`;
+            }).join('');
+
+            const inactiveChips = (users) => users.slice(0, 20).map(u => {
+              const team = u.team || 'Unassigned';
+              const color = getTeamColor(team);
+              return `<span style="display:inline-block;margin:3px;padding:4px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:20px;font-size:12px;color:#9a3412">
+                ${u.firstName} ${u.lastName}
+                <span style="background:${color}22;color:${color};padding:1px 6px;border-radius:8px;font-size:11px;font-weight:600;margin-left:4px">${team}</span>
+              </span>`;
+            }).join('') + (users.length > 20 ? `<span style="font-size:12px;color:#9a3412;margin-left:8px">+${users.length-20} more</span>` : '');
+
+            const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f9fafb;font-family:'Segoe UI',Arial,sans-serif">
+  <div style="max-width:620px;margin:0 auto;padding:24px 16px">
+
+    <!-- Header -->
+    <div style="background:#1a1a2e;border-radius:12px;padding:24px 28px;margin-bottom:20px">
+      <div style="font-size:11px;color:rgba(255,255,255,0.5);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">OpenPhone · Daily Report</div>
+      <div style="font-size:22px;font-weight:700;color:#fff">${dateLabel}</div>
+      <div style="font-size:12px;color:rgba(255,255,255,0.4);margin-top:4px">Outgoing calls summary for your team</div>
+    </div>
+
+    <!-- Yesterday Section -->
+    <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;margin-bottom:16px;overflow:hidden">
+      <div style="background:#4f46e5;padding:14px 20px">
+        <div style="font-size:13px;font-weight:700;color:#fff;letter-spacing:0.3px">📅 YESTERDAY — ${ydDate}</div>
+      </div>
+
+      <!-- Yesterday Stats -->
+      <div style="display:flex;padding:16px 20px;gap:16px;border-bottom:1px solid #f3f4f6">
+        <div style="flex:1;text-align:center;padding:12px;background:#f9fafb;border-radius:8px">
+          <div style="font-size:24px;font-weight:700;color:#4f46e5">${formatNum(ydTotal)}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px;text-transform:uppercase;letter-spacing:0.5px">Total Calls</div>
+        </div>
+        <div style="flex:1;text-align:center;padding:12px;background:#f9fafb;border-radius:8px">
+          <div style="font-size:24px;font-weight:700;color:#16a34a">${ydActive}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px;text-transform:uppercase;letter-spacing:0.5px">Active Users</div>
+        </div>
+        <div style="flex:1;text-align:center;padding:12px;background:#fff7ed;border-radius:8px">
+          <div style="font-size:24px;font-weight:700;color:#ea580c">${ydInactive.length}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px;text-transform:uppercase;letter-spacing:0.5px">Inactive</div>
+        </div>
+      </div>
+
+      <!-- Yesterday Top 5 -->
+      <div style="padding:16px 20px 8px">
+        <div style="font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px">🏆 Top 5 Callers</div>
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:#f9fafb">
+              <th style="padding:8px 16px;font-size:11px;color:#6b7280;text-align:left;font-weight:600">Name</th>
+              <th style="padding:8px 16px;font-size:11px;color:#6b7280;text-align:left;font-weight:600">Team</th>
+              <th style="padding:8px 16px;font-size:11px;color:#6b7280;text-align:right;font-weight:600">Calls</th>
+            </tr>
+          </thead>
+          <tbody>${topCallerRows(ydTop5, 'ydCalls')}</tbody>
+        </table>
+      </div>
+
+      <!-- Yesterday Inactive -->
+      ${ydInactive.length > 0 ? `
+      <div style="padding:12px 20px 16px;border-top:1px solid #f3f4f6">
+        <div style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px">⚠️ No calls yesterday (${ydInactive.length})</div>
+        <div>${inactiveChips(ydInactive)}</div>
+      </div>` : `
+      <div style="padding:12px 20px 16px;border-top:1px solid #f3f4f6;text-align:center;color:#16a34a;font-size:13px;font-weight:600">
+        ✅ All users made calls yesterday!
+      </div>`}
+    </div>
+
+    <!-- Last 7 Days Section -->
+    <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;margin-bottom:16px;overflow:hidden">
+      <div style="background:#0f766e;padding:14px 20px">
+        <div style="font-size:13px;font-weight:700;color:#fff;letter-spacing:0.3px">📊 LAST 7 DAYS</div>
+      </div>
+
+      <!-- 7 Day Stats -->
+      <div style="display:flex;padding:16px 20px;gap:16px;border-bottom:1px solid #f3f4f6">
+        <div style="flex:1;text-align:center;padding:12px;background:#f9fafb;border-radius:8px">
+          <div style="font-size:24px;font-weight:700;color:#0f766e">${formatNum(weekTotal)}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px;text-transform:uppercase;letter-spacing:0.5px">Total Calls</div>
+        </div>
+        <div style="flex:1;text-align:center;padding:12px;background:#f9fafb;border-radius:8px">
+          <div style="font-size:24px;font-weight:700;color:#16a34a">${weekActive}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px;text-transform:uppercase;letter-spacing:0.5px">Active Users</div>
+        </div>
+        <div style="flex:1;text-align:center;padding:12px;background:#fff7ed;border-radius:8px">
+          <div style="font-size:24px;font-weight:700;color:#ea580c">${weekInactive.length}</div>
+          <div style="font-size:11px;color:#6b7280;margin-top:2px;text-transform:uppercase;letter-spacing:0.5px">Inactive</div>
+        </div>
+      </div>
+
+      <!-- 7 Day Top 5 -->
+      <div style="padding:16px 20px 8px">
+        <div style="font-size:12px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px">🏆 Top 5 Callers</div>
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:#f9fafb">
+              <th style="padding:8px 16px;font-size:11px;color:#6b7280;text-align:left;font-weight:600">Name</th>
+              <th style="padding:8px 16px;font-size:11px;color:#6b7280;text-align:left;font-weight:600">Team</th>
+              <th style="padding:8px 16px;font-size:11px;color:#6b7280;text-align:right;font-weight:600">Calls</th>
+            </tr>
+          </thead>
+          <tbody>${topCallerRows(weekTop5, 'weekCalls')}</tbody>
+        </table>
+      </div>
+
+      <!-- 7 Day Inactive -->
+      ${weekInactive.length > 0 ? `
+      <div style="padding:12px 20px 16px;border-top:1px solid #f3f4f6">
+        <div style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px">⚠️ No calls in 7 days (${weekInactive.length})</div>
+        <div>${inactiveChips(weekInactive)}</div>
+      </div>` : `
+      <div style="padding:12px 20px 16px;border-top:1px solid #f3f4f6;text-align:center;color:#16a34a;font-size:13px;font-weight:600">
+        ✅ All users active in last 7 days!
+      </div>`}
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align:center;padding:16px">
+      <a href="https://animesh-stack.github.io/openphone-refresh/" 
+         style="display:inline-block;background:#4f46e5;color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600">
+        View Full Dashboard →
+      </a>
+      <div style="font-size:11px;color:#9ca3af;margin-top:12px">
+        Sent daily at 11:00 AM IST · OpenPhone Outgoing Calls Dashboard
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>`;
+
+            // ── Send via Resend ────────────────────────────────────────────
+            const emailBody = JSON.stringify({
+              from: 'OpenPhone Dashboard <digest@codeyoung.com>',
+              to: RECIPIENTS,
+              subject: `OpenPhone Daily Report — ${dateLabel} | ${formatNum(ydTotal)} calls yesterday`,
+              html
+            });
+
+            const r = await request('https://api.resend.com/emails', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${API_KEY}`,
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(emailBody)
+              },
+              body: emailBody
+            });
+
+            if (r.status === 200 || r.status === 201) {
+              console.log(`✅ Digest sent to ${RECIPIENTS.join(', ')}`);
+              console.log(`   Yesterday: ${formatNum(ydTotal)} calls, ${ydActive} active, ${ydInactive.length} inactive`);
+              console.log(`   Last 7d:   ${formatNum(weekTotal)} calls, ${weekActive} active, ${weekInactive.length} inactive`);
+            } else {
+              throw new Error(`Email send failed: ${r.status} — ${JSON.stringify(r.body)}`);
+            }
+          }
+
+          main().catch(err => { console.error(err); process.exit(1); });
+          EOF
