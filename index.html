@@ -471,33 +471,31 @@ function updateArchivedSection() {
 const INACTIVE_DAYS = 7; // threshold
 
 function getInactiveUsers(rows) {
-  const today = new Date();
-  const inactive = [];
-  for (const u of rows) {
-    if (!u.days || Object.keys(u.days).length === 0) continue; // skip users with no daily data
-    let hasCall = false;
-    for (let i = 0; i < INACTIVE_DAYS; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      const dk = d.getFullYear() + '-' +
-        String(d.getMonth()+1).padStart(2,'0') + '-' +
-        String(d.getDate()).padStart(2,'0');
-      if ((u.days[dk] || 0) > 0) { hasCall = true; break; }
-    }
-    if (!hasCall) inactive.push(u);
-  }
-  return inactive;
+  return rows.filter(u => isUserInactive(u));
+}
+
+function getLocalDateKey(daysAgo) {
+  // Day keys stored in UTC by GitHub Actions — use UTC for lookup
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - daysAgo);
+  return d.getUTCFullYear() + '-' +
+    String(d.getUTCMonth()+1).padStart(2,'0') + '-' +
+    String(d.getUTCDate()).padStart(2,'0');
 }
 
 function isUserInactive(u) {
-  const today = new Date();
-  if (!u.days || Object.keys(u.days).length === 0) return false;
+  // Use local IST dates — matching how GitHub Actions now stores day keys
+  if (!u.days || Object.keys(u.days).length === 0) {
+    const mk = getLocalDateKey(0).slice(0, 7);
+    const prevMk = (() => {
+      const d = new Date();
+      d.setMonth(d.getMonth() - 1);
+      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+    })();
+    return ((u.months||{})[mk] || 0) === 0 && ((u.months||{})[prevMk] || 0) === 0;
+  }
   for (let i = 0; i < INACTIVE_DAYS; i++) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const dk = d.getFullYear() + '-' +
-      String(d.getMonth()+1).padStart(2,'0') + '-' +
-      String(d.getDate()).padStart(2,'0');
+    const dk = getLocalDateKey(i);
     if ((u.days[dk] || 0) > 0) return false;
   }
   return true;
