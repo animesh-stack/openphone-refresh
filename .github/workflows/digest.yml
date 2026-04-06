@@ -281,7 +281,7 @@ jobs:
 
             // ── Send via Resend ────────────────────────────────────────────
             const emailBody = JSON.stringify({
-              from: 'OpenPhone Dashboard <digest@codeyoung.com>',
+              from: 'OpenPhone Dashboard <onboarding@resend.dev>',
               to: RECIPIENTS,
               subject: `OpenPhone Daily Report — ${dateLabel} | ${formatNum(ydTotal)} calls yesterday`,
               html
