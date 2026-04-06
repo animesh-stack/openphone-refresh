@@ -102,7 +102,15 @@ jobs:
 
             const ydTotal    = yesterdayStats.reduce((s, u) => s + u.ydCalls, 0);
             const ydActive   = yesterdayStats.filter(u => u.ydCalls > 0).length;
-            const ydInactive = yesterdayStats.filter(u => u.ydCalls === 0);
+            const ydInactive = yesterdayStats.filter(u => {
+              if (u.ydCalls > 0) return false;
+              if (u.days && Object.keys(u.days).length > 0) return true;
+              const now = new Date();
+              const mk = now.getUTCFullYear() + '-' + String(now.getUTCMonth()+1).padStart(2,'0');
+              const prev = new Date(now); prev.setUTCMonth(prev.getUTCMonth()-1);
+              const prevMk = prev.getUTCFullYear() + '-' + String(prev.getUTCMonth()+1).padStart(2,'0');
+              return ((u.months||{})[mk]||0) === 0 && ((u.months||{})[prevMk]||0) === 0;
+            });
             const ydTop5     = yesterdayStats.filter(u => u.ydCalls > 0).slice(0, 5);
 
             // ── LAST 7 DAYS stats ─────────────────────────────────────────
@@ -114,7 +122,18 @@ jobs:
 
             const weekTotal    = weekStats.reduce((s, u) => s + u.weekCalls, 0);
             const weekActive   = weekStats.filter(u => u.weekCalls > 0).length;
-            const weekInactive = weekStats.filter(u => u.weekCalls === 0);
+            // Include users with no daily data but also 0 monthly calls recently
+            const weekInactive = weekStats.filter(u => {
+              if (u.weekCalls > 0) return false;
+              // Has daily data — already confirmed 0 in last 7 days
+              if (u.days && Object.keys(u.days).length > 0) return true;
+              // No daily data — check monthly
+              const now = new Date();
+              const mk = now.getUTCFullYear() + '-' + String(now.getUTCMonth()+1).padStart(2,'0');
+              const prev = new Date(now); prev.setUTCMonth(prev.getUTCMonth()-1);
+              const prevMk = prev.getUTCFullYear() + '-' + String(prev.getUTCMonth()+1).padStart(2,'0');
+              return ((u.months||{})[mk]||0) === 0 && ((u.months||{})[prevMk]||0) === 0;
+            });
             const weekTop5     = weekStats.filter(u => u.weekCalls > 0).slice(0, 5);
 
             // ── IST date label ────────────────────────────────────────────
